@@ -29,6 +29,7 @@ uint16_t kColorTrackVector = 0xFFFF;
 uint16_t kColorTagType = 0x5DFF;
 uint16_t kColorTagAltitude = 0xFFE0;
 uint16_t kColorRunway = 0x4D5F;
+uint16_t kColorRunwayLabel = 0x7DFF;
 
 }  // namespace radar
 
@@ -194,6 +195,8 @@ void initPalette() {
       tft.color565(radar::kTagAltR, radar::kTagAltG, radar::kTagAltB);
   radar::kColorRunway =
       tft.color565(radar::kRunwayR, radar::kRunwayG, radar::kRunwayB);
+  radar::kColorRunwayLabel = tft.color565(radar::kRunwayLabelR, radar::kRunwayLabelG,
+                                          radar::kRunwayLabelB);
 }
 
 constexpr float kKmPerDeg = 111.0f;
