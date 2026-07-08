@@ -696,7 +696,8 @@ void drawScaleLabel(int cx, int cy, int outer_radius) {
   }
 
   s_draw->setTextDatum(textdatum_t::middle_center);
-  s_draw->setTextColor(radar::kColorLabel);  // white, contrasts with green rings
+  // Same green as the grid — it's SA reference, not a focal element.
+  s_draw->setTextColor(radar::kColorGrid);
   s_draw->drawString(scale_label, px, py);
   const int left = px - box_w / 2;
   const int top = py - box_h / 2;
