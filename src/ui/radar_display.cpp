@@ -381,71 +381,281 @@ void applyTagStyle() {
   }
 }
 
-int measureTagBlockWidth(const services::adsb::Aircraft& plane) {
-  applyTagStyle();
-  int max_w = 0;
-  if (plane.callsign[0] != '\0') {
-    const int w = s_draw->textWidth(plane.callsign);
-    if (w > max_w) {
-      max_w = w;
-    }
+// Forward-declared below; used by tag placement now.
+void datumTopLeftOffset(textdatum_t d, int tw, int th, int* dx, int* dy);
+
+// Format altitude in ATC-standard hundreds of feet (e.g. 015 = 1500 ft,
+// 350 = FL350). Ground → "GND". Unknown → empty string.
+void formatAltitudeShort(int32_t alt_ft, char* out, size_t len) {
+  if (len == 0) return;
+  if (alt_ft == INT32_MIN) {
+    std::snprintf(out, len, "GND");
+    return;
   }
-  if (plane.type[0] != '\0') {
-    const int w = s_draw->textWidth(plane.type);
-    if (w > max_w) {
-      max_w = w;
-    }
-  }
-  if (plane.alt[0] != '\0') {
-    const int w = s_draw->textWidth(plane.alt);
-    if (w > max_w) {
-      max_w = w;
-    }
-  }
-  return max_w;
+  const int hundreds = (alt_ft + 50) / 100;
+  std::snprintf(out, len, "%03d", hundreds);
 }
 
-void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane) {
-  initTagLabelMetrics();
-  applyTagStyle();
+// FAA JO 7110.65: display trend indicator when |vertical rate| ≥ 500 fpm.
+constexpr float kTrendThresholdFpm = 500.0f;
+inline bool showTrend(float vs_fpm) {
+  return std::fabs(vs_fpm) >= kTrendThresholdFpm;
+}
 
-  const int line_h = s_draw->fontHeight();
-  const int block_w = measureTagBlockWidth(plane);
-  const int block_h = line_h * 3;
-  int ly = y - block_h / 2;
+// One global toggle for altitude vs type display, in sync across all tags.
+// 4 s cadence — roughly one radar sweep on legacy scopes.
+constexpr unsigned long kTagAltPhaseMs = 4000;
+inline bool tagShowsAltitude() {
+  return (millis() / kTagAltPhaseMs) % 2 == 0;
+}
 
-  const int symbol_half =
-      radar::kAircraftNoseLenPx + radar::kAircraftTailHalfPx;
-  // West (left): tag toward center on the right; east (right): tag on the left.
-  const bool tag_on_right = x < radar::kCenterX;
-  int anchor_x = 0;
-  if (tag_on_right) {
-    anchor_x = x + symbol_half + radar::kAircraftLabelGapPx;
-    anchor_x = std::min(anchor_x, radar::kSize - block_w - 1);
-    s_draw->setTextDatum(textdatum_t::top_left);
+// A small filled triangle: apex UP for climb, apex DOWN for descent. Drawn
+// so its baseline aligns with the text baseline it sits next to.
+constexpr int kTrendGlyphW = 5;
+constexpr int kTrendGlyphH = 6;
+constexpr int kTrendGap = 2;  // px between altitude text and triangle
+void drawTrendGlyph(int left, int top, bool climb, uint16_t color) {
+  const int r = left + kTrendGlyphW - 1;
+  const int b = top + kTrendGlyphH - 1;
+  const int cx = left + kTrendGlyphW / 2;
+  if (climb) {
+    s_draw->fillTriangle(cx, top, left, b, r, b, color);
   } else {
-    anchor_x = x - symbol_half - radar::kAircraftLabelGapPx;
-    anchor_x = std::max(anchor_x, block_w + 1);
-    s_draw->setTextDatum(textdatum_t::top_right);
+    s_draw->fillTriangle(left, top, r, top, cx, b, color);
   }
-  ly = std::max(1, std::min(ly, radar::kSize - block_h - 1));
+}
 
-  if (plane.callsign[0] != '\0') {
+struct TagContent {
+  const char* line1;  // callsign (or hex)
+  char line2[10];     // formatted alt "015" or type "B738"
+  bool line2_is_alt;
+  bool draw_trend;
+  bool trend_up;
+  uint16_t line2_color;
+};
+
+TagContent buildTagContent(const services::adsb::Aircraft& p, bool show_alt) {
+  TagContent c{};
+  c.line1 = p.callsign[0] != '\0' ? p.callsign : "";
+  c.draw_trend = false;
+  if (show_alt) {
+    c.line2_is_alt = true;
+    c.line2_color = radar::kColorTagAltitude;
+    formatAltitudeShort(p.alt_ft, c.line2, sizeof(c.line2));
+    if (p.alt_ft != INT32_MIN && showTrend(p.vs_fpm)) {
+      c.draw_trend = true;
+      c.trend_up = p.vs_fpm > 0;
+    }
+  } else if (p.type[0] != '\0') {
+    c.line2_is_alt = false;
+    c.line2_color = radar::kColorTagType;
+    std::snprintf(c.line2, sizeof(c.line2), "%s", p.type);
+  } else {
+    // No type — fall back to altitude so we don't drop line 2 entirely.
+    c.line2_is_alt = true;
+    c.line2_color = radar::kColorTagAltitude;
+    formatAltitudeShort(p.alt_ft, c.line2, sizeof(c.line2));
+    if (p.alt_ft != INT32_MIN && showTrend(p.vs_fpm)) {
+      c.draw_trend = true;
+      c.trend_up = p.vs_fpm > 0;
+    }
+  }
+  return c;
+}
+
+// --- Placement engine ------------------------------------------------------
+// 8 anchor slots around the aircraft symbol; slot 0 = NE and steps CW.
+// Each slot is (dx, dy from symbol center to text-box anchor point) plus
+// the datum that keeps the text on the OUTWARD side of that anchor.
+
+enum class Slot : uint8_t { NE, E, SE, S, SW, W, NW, N, kCount };
+constexpr uint8_t kSlotCount = 8;
+
+struct SlotDef {
+  int dx;
+  int dy;
+  textdatum_t datum;
+};
+// Anchor points offset ~14 px from icon center (icon extends ~12 px).
+constexpr int kSlotAxis = 14;
+constexpr int kSlotDiag = 12;   // reduced so diagonal tags don't sit too far
+const SlotDef kSlots[kSlotCount] = {
+    { kSlotDiag, -kSlotDiag, textdatum_t::bottom_left  },  // NE
+    { kSlotAxis,  0,          textdatum_t::middle_left  },  // E
+    { kSlotDiag,  kSlotDiag,  textdatum_t::top_left     },  // SE
+    { 0,          kSlotAxis,  textdatum_t::top_center   },  // S
+    {-kSlotDiag,  kSlotDiag,  textdatum_t::top_right    },  // SW
+    {-kSlotAxis,  0,          textdatum_t::middle_right },  // W
+    {-kSlotDiag, -kSlotDiag,  textdatum_t::bottom_right },  // NW
+    { 0,         -kSlotAxis,  textdatum_t::bottom_center},  // N
+};
+
+// Per-aircraft hysteresis — remembered across frames, keyed by callsign.
+struct TagMemory {
+  char callsign[9];
+  uint8_t slot;
+  unsigned long last_used_ms;
+};
+constexpr size_t kMaxTagMemory = services::adsb::kMaxAircraft;
+TagMemory s_tag_memory[kMaxTagMemory] = {};
+size_t s_tag_memory_count = 0;
+
+TagMemory* findMemory(const char* callsign) {
+  for (size_t i = 0; i < s_tag_memory_count; ++i) {
+    if (strncmp(s_tag_memory[i].callsign, callsign,
+                     sizeof(s_tag_memory[i].callsign)) == 0) {
+      return &s_tag_memory[i];
+    }
+  }
+  return nullptr;
+}
+
+void rememberSlot(const char* callsign, uint8_t slot) {
+  TagMemory* m = findMemory(callsign);
+  if (m == nullptr) {
+    if (s_tag_memory_count >= kMaxTagMemory) return;
+    m = &s_tag_memory[s_tag_memory_count++];
+  }
+  strncpy(m->callsign, callsign, sizeof(m->callsign) - 1);
+  m->callsign[sizeof(m->callsign) - 1] = '\0';
+  m->slot = slot;
+  m->last_used_ms = millis();
+}
+
+// Purge memory entries not touched in the last N seconds so a completed
+// flight doesn't force a stale placement on a new aircraft with the same
+// (rare) callsign collision.
+void gcTagMemory() {
+  const unsigned long now = millis();
+  size_t out = 0;
+  for (size_t i = 0; i < s_tag_memory_count; ++i) {
+    if (now - s_tag_memory[i].last_used_ms < 30000) {
+      if (out != i) s_tag_memory[out] = s_tag_memory[i];
+      ++out;
+    }
+  }
+  s_tag_memory_count = out;
+}
+
+// Compute where an aircraft will be a few seconds ahead so tag placement
+// doesn't flip between odd/even frames when a plane is skirting a candidate.
+constexpr float kPredictSec = 6.0f;
+void predictScreenPos(const services::adsb::Aircraft& p, int cur_x, int cur_y,
+                      int* out_x, int* out_y) {
+  if (p.gs_knots <= 0.0f) {
+    *out_x = cur_x;
+    *out_y = cur_y;
+    return;
+  }
+  // px/sec derived from current range preset. Same formula as the render
+  // pipeline's px_per_km applied over kPredictSec.
+  const float outer_km = radar::rangeCurrent().outer_km;
+  const float px_per_km =
+      static_cast<float>(radar::kGridOuterRadius) / outer_km;
+  const float km_per_sec = p.gs_knots * 1.852f / 3600.0f;
+  const float dist_px = km_per_sec * kPredictSec * px_per_km;
+  constexpr float kDegToRad = 3.14159265f / 180.0f;
+  const float rad = p.track_deg * kDegToRad;
+  *out_x = cur_x + static_cast<int>(std::lroundf(dist_px * sinf(rad)));
+  *out_y = cur_y - static_cast<int>(std::lroundf(dist_px * cosf(rad)));
+}
+
+struct TagPlacement {
+  int anchor_x;
+  int anchor_y;
+  int rect_x;
+  int rect_y;
+  int rect_w;
+  int rect_h;
+  textdatum_t datum;
+  uint8_t slot;
+  TagContent content;
+};
+
+int tagWidth(const TagContent& c) {
+  int line1_w = c.line1[0] != '\0' ? s_draw->textWidth(c.line1) : 0;
+  int line2_w = c.line2[0] != '\0' ? s_draw->textWidth(c.line2) : 0;
+  if (c.draw_trend) line2_w += kTrendGap + kTrendGlyphW;
+  return std::max(line1_w, line2_w);
+}
+
+bool tryPlaceSlot(uint8_t slot, int ax, int ay, const TagContent& c,
+                  int px, int py, TagPlacement* out) {
+  applyTagStyle();
+  const int line_h = s_draw->fontHeight();
+  const int w = tagWidth(c);
+  const int h = line_h * 2;
+  const SlotDef& s = kSlots[slot];
+  const int anchor_x = ax + s.dx;
+  const int anchor_y = ay + s.dy;
+  int off_x = 0;
+  int off_y = 0;
+  datumTopLeftOffset(s.datum, w, h, &off_x, &off_y);
+  const int left = anchor_x + off_x;
+  const int top = anchor_y + off_y;
+  // Reject if it would clip off-screen or off-disc.
+  if (left < 1 || top < 1 ||
+      left + w >= radar::kSize - 1 || top + h >= radar::kSize - 1) {
+    return false;
+  }
+  // Predicted-position check: also make sure the tag rect doesn't intersect
+  // an area the aircraft (or another aircraft) will occupy in a few frames.
+  (void)px;  // predicted position collision is baked into labels:: registry
+  (void)py;
+  if (labels::intersects(left, top, w, h)) return false;
+  out->anchor_x = anchor_x;
+  out->anchor_y = anchor_y;
+  out->rect_x = left;
+  out->rect_y = top;
+  out->rect_w = w;
+  out->rect_h = h;
+  out->datum = s.datum;
+  out->slot = slot;
+  out->content = c;
+  return true;
+}
+
+// Find a good slot: prefer the callsign's last slot (hysteresis), then walk
+// the 8-way ring starting from that slot outward. Fall back to slot 0 with
+// the collision accepted.
+bool pickTagPlacement(const services::adsb::Aircraft& p, int ax, int ay,
+                      int px, int py, const TagContent& c,
+                      TagPlacement* out) {
+  const TagMemory* mem =
+      (p.callsign[0] != '\0') ? findMemory(p.callsign) : nullptr;
+  uint8_t start = mem ? mem->slot : 0;
+  for (int step = 0; step < kSlotCount; ++step) {
+    const uint8_t slot = (start + step) % kSlotCount;
+    if (tryPlaceSlot(slot, ax, ay, c, px, py, out)) return true;
+  }
+  // Everything collides — fall back to the preferred slot even with overlap.
+  return tryPlaceSlot(start, ax, ay, c, px, py, out) ||
+         tryPlaceSlot(0, ax, ay, c, px, py, out);
+}
+
+void drawTagPlacement(const TagPlacement& tp) {
+  applyTagStyle();
+  const int line_h = s_draw->fontHeight();
+  const TagContent& c = tp.content;
+  s_draw->setTextDatum(textdatum_t::top_left);
+
+  if (c.line1[0] != '\0') {
     s_draw->setTextColor(radar::kColorLabel, radar::kColorBackground);
-    s_draw->drawString(plane.callsign, anchor_x, ly);
+    s_draw->drawString(c.line1, tp.rect_x, tp.rect_y);
   }
-  ly += line_h;
-
-  if (plane.type[0] != '\0') {
-    s_draw->setTextColor(radar::kColorTagType, radar::kColorBackground);
-    s_draw->drawString(plane.type, anchor_x, ly);
+  if (c.line2[0] != '\0') {
+    const int line2_y = tp.rect_y + line_h;
+    s_draw->setTextColor(c.line2_color, radar::kColorBackground);
+    s_draw->drawString(c.line2, tp.rect_x, line2_y);
+    if (c.draw_trend) {
+      const int text_w = s_draw->textWidth(c.line2);
+      const int glyph_left = tp.rect_x + text_w + kTrendGap;
+      const int glyph_top =
+          line2_y + (line_h - kTrendGlyphH) / 2;
+      drawTrendGlyph(glyph_left, glyph_top, c.trend_up, c.line2_color);
+    }
   }
-  ly += line_h;
-
-  if (plane.alt[0] != '\0') {
-    s_draw->setTextColor(radar::kColorTagAltitude, radar::kColorBackground);
-    s_draw->drawString(plane.alt, anchor_x, ly);
-  }
+  labels::add(tp.rect_x - 1, tp.rect_y - 1, tp.rect_w + 2, tp.rect_h + 2);
 }
 
 struct AircraftDrawItem {
@@ -532,6 +742,10 @@ void drawAircraft() {
   }
 
   sortDrawItemsFarFirst(items, draw_count);
+  // First pass: draw ALL aircraft symbols + track vectors and register their
+  // keep-out rects (current + predicted position) so tag placement dodges them.
+  int pred_x[services::adsb::kMaxAircraft];
+  int pred_y[services::adsb::kMaxAircraft];
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
     const int x = items[d].x;
@@ -539,10 +753,44 @@ void drawAircraft() {
     drawSpeedVector(x, y, planes[i].nose_deg, planes[i].track_deg,
                     planes[i].gs_knots, radar::kColorTrackVector);
     drawHeadingTriangle(x, y, planes[i].nose_deg, radar::kColorAircraft);
+    predictScreenPos(planes[i], x, y, &pred_x[d], &pred_y[d]);
+    // Icon keep-out (current position) — ~14×14 around symbol center.
+    labels::add(x - 8, y - 8, 16, 16);
+    // Track-vector endpoint keep-out — small block at the vector tip so tags
+    // don't cover the leading-edge indicator.
+    const int vec_len = speedLineLengthPx(planes[i].gs_knots);
+    if (vec_len > 0) {
+      constexpr float kDegToRad = 3.14159265f / 180.0f;
+      const float rad = planes[i].track_deg * kDegToRad;
+      const int ex = x + static_cast<int>(std::lroundf(vec_len * sinf(rad)));
+      const int ey = y - static_cast<int>(std::lroundf(vec_len * cosf(rad)));
+      labels::add(ex - 4, ey - 4, 8, 8);
+    }
+    // Predicted position keep-out — smaller, biased toward stability.
+    if (pred_x[d] != x || pred_y[d] != y) {
+      labels::add(pred_x[d] - 6, pred_y[d] - 6, 12, 12);
+    }
   }
+
+  // Second pass: place + draw tags. Placement dodges anything registered in
+  // labels:: (grid text, airport labels, aircraft icons/vectors, prior tags).
+  gcTagMemory();
+  const bool show_alt = tagShowsAltitude();
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
-    drawAircraftTag(items[d].x, items[d].y, planes[i]);
+    if (planes[i].callsign[0] == '\0' && planes[i].type[0] == '\0' &&
+        planes[i].alt_ft == INT32_MIN) {
+      continue;
+    }
+    TagContent content = buildTagContent(planes[i], show_alt);
+    TagPlacement tp;
+    if (pickTagPlacement(planes[i], items[d].x, items[d].y, pred_x[d],
+                         pred_y[d], content, &tp)) {
+      drawTagPlacement(tp);
+      if (planes[i].callsign[0] != '\0') {
+        rememberSlot(planes[i].callsign, tp.slot);
+      }
+    }
   }
 }
 

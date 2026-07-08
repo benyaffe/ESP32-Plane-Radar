@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 namespace services::adsb {
 
@@ -10,9 +11,10 @@ struct Aircraft {
   float nose_deg;
   float track_deg;
   float gs_knots;
+  float vs_fpm;   // Barometric or geometric vertical rate, ft/min. 0 if unknown.
+  int32_t alt_ft; // Integer altitude in feet, or INT32_MIN for on-ground / unknown.
   char callsign[9];
   char type[5];
-  char alt[12];
 };
 
 constexpr size_t kMaxAircraft = 64;

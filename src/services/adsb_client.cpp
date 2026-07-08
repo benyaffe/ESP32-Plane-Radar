@@ -5,6 +5,7 @@
 
 #include <ArduinoJson.h>
 
+#include <climits>
 #include <cstring>
 
 #include "config.h"
@@ -165,26 +166,24 @@ void copyJsonStringTrimmed(const JsonObject& obj, const char* key, char* out,
   out[n] = '\0';
 }
 
-void formatAltitudeTag(const JsonObject& plane, char* out, size_t out_len) {
-  out[0] = '\0';
-  if (out_len == 0) {
-    return;
+int32_t pickAltitudeFt(const JsonObject& plane) {
+  if (plane["alt_baro"].is<const char*>() &&
+      strcmp(plane["alt_baro"].as<const char*>(), "ground") == 0) {
+    return INT32_MIN;  // on-ground sentinel
   }
-
-  if (plane["alt_baro"].is<const char*>()) {
-    const char* s = plane["alt_baro"].as<const char*>();
-    if (strcmp(s, "ground") == 0) {
-      strncpy(out, "GND", out_len - 1);
-      out[out_len - 1] = '\0';
-      return;
-    }
-  }
-
   float alt = 0.0f;
   if (readJsonFloat(plane, "alt_baro", &alt) ||
       readJsonFloat(plane, "alt_geom", &alt)) {
-    snprintf(out, out_len, "%d ft", static_cast<int>(lroundf(alt)));
+    return static_cast<int32_t>(lroundf(alt));
   }
+  return INT32_MIN;
+}
+
+float pickVerticalRate(const JsonObject& plane) {
+  float v = 0.0f;
+  if (readJsonFloat(plane, "baro_rate", &v)) return v;
+  if (readJsonFloat(plane, "geom_rate", &v)) return v;
+  return 0.0f;
 }
 
 void fillTagFields(Aircraft* ac, const JsonObject& plane) {
@@ -192,9 +191,9 @@ void fillTagFields(Aircraft* ac, const JsonObject& plane) {
   if (ac->callsign[0] == '\0') {
     copyJsonStringTrimmed(plane, "hex", ac->callsign, sizeof(ac->callsign));
   }
-
   copyJsonStringTrimmed(plane, "t", ac->type, sizeof(ac->type));
-  formatAltitudeTag(plane, ac->alt, sizeof(ac->alt));
+  ac->alt_ft = pickAltitudeFt(plane);
+  ac->vs_fpm = pickVerticalRate(plane);
 }
 
 }  // namespace

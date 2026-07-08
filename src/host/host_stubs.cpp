@@ -10,6 +10,7 @@
 
 #include <ArduinoJson.h>
 
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -104,21 +105,24 @@ void copyStringTrimmed(JsonObjectConst obj, const char* key, char* out,
   out[n] = '\0';
 }
 
-void formatAltitudeTag(JsonObjectConst p, char* out, size_t out_len) {
-  out[0] = '\0';
-  if (out_len == 0) return;
-  if (p["alt_baro"].is<const char*>()) {
-    if (std::strcmp(p["alt_baro"].as<const char*>(), "ground") == 0) {
-      std::strncpy(out, "GND", out_len - 1);
-      out[out_len - 1] = '\0';
-      return;
-    }
+int32_t pickAltitudeFt(JsonObjectConst p) {
+  if (p["alt_baro"].is<const char*>() &&
+      std::strcmp(p["alt_baro"].as<const char*>(), "ground") == 0) {
+    return INT32_MIN;
   }
   float alt = 0.0f;
   if (readJsonFloat(p, "alt_baro", &alt) ||
       readJsonFloat(p, "alt_geom", &alt)) {
-    std::snprintf(out, out_len, "%d ft", static_cast<int>(std::lroundf(alt)));
+    return static_cast<int32_t>(std::lroundf(alt));
   }
+  return INT32_MIN;
+}
+
+float pickVerticalRate(JsonObjectConst p) {
+  float v = 0.0f;
+  if (readJsonFloat(p, "baro_rate", &v)) return v;
+  if (readJsonFloat(p, "geom_rate", &v)) return v;
+  return 0.0f;
 }
 
 }  // namespace
@@ -178,7 +182,8 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
     }
     copyStringTrimmed(plane, "t", s_aircraft[n].type,
                       sizeof(s_aircraft[n].type));
-    formatAltitudeTag(plane, s_aircraft[n].alt, sizeof(s_aircraft[n].alt));
+    s_aircraft[n].alt_ft = pickAltitudeFt(plane);
+    s_aircraft[n].vs_fpm = pickVerticalRate(plane);
     ++n;
   }
   s_count = n;
