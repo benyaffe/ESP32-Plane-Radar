@@ -5,12 +5,16 @@
 #include <cmath>
 #include <cstdlib>
 
+#include "data/focus_airports.h"
 #include "data/large_airports.h"
 #include "hardware/display_font.h"
+#include "services/focus_points.h"
 #include "services/radar_location.h"
 #include "ui/label_layout.h"
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
+
+#include <cstring>
 
 namespace fonts = lgfx::v1::fonts;
 
@@ -200,7 +204,8 @@ void drawAirportIdentLabel(lgfx::LGFXBase& gfx, const char* ident, int mx,
   labels::add(left, top, w, h);
 }
 
-bool drawRunwayLine(lgfx::LGFXBase& gfx, const data::large_airports::Runway& rw) {
+template <typename RunwayT>
+bool drawRunwayLineT(lgfx::LGFXBase& gfx, const RunwayT& rw) {
   const float le_lat = e7ToDeg(rw.le_lat_e7);
   const float le_lon = e7ToDeg(rw.le_lon_e7);
   const float he_lat = e7ToDeg(rw.he_lat_e7);
@@ -265,8 +270,8 @@ void clipPointOntoOuterRing(int* x, int* y) {
 // below if bottom half). If that would collide with a previously-drawn
 // label (cardinal or another airport), flip to the other side. Fallback:
 // use preferred side and accept overlay.
-void drawAirportLabel(lgfx::LGFXBase& gfx,
-                      const data::large_airports::Airport& ap) {
+template <typename AirportT>
+void drawAirportLabelT(lgfx::LGFXBase& gfx, const AirportT& ap) {
   int ax = 0;
   int ay = 0;
   latLonToScreen(e7ToDeg(ap.lat_e7), e7ToDeg(ap.lon_e7), &ax, &ay);
@@ -304,6 +309,16 @@ void drawAirportLabel(lgfx::LGFXBase& gfx,
 
 }  // namespace
 
+// Match the current focus airport (if any) against a focus_airports ident.
+// Focus names in services::focus omit the leading K (e.g. "SQL"); focus
+// airport idents include it ("KSQL"). Compare with a 1-char offset.
+bool focusMatches(const char* airport_ident) {
+  const auto& fp = services::focus::current();
+  if (fp.is_home) return false;
+  if (airport_ident == nullptr || airport_ident[0] != 'K') return false;
+  return std::strcmp(airport_ident + 1, fp.name) == 0;
+}
+
 void drawLargeAirportRunways(lgfx::LGFXBase& gfx) {
   if (!radar::showRunways()) {
     return;
@@ -334,7 +349,7 @@ void drawLargeAirportRunways(lgfx::LGFXBase& gfx) {
     if (!s_in_range[ap_idx]) {
       continue;
     }
-    if (!drawRunwayLine(gfx, rw)) {
+    if (!drawRunwayLineT(gfx, rw)) {
       continue;
     }
     if (!s_label_pending[ap_idx] && label_count < kMaxAirportLabels) {
@@ -343,14 +358,37 @@ void drawLargeAirportRunways(lgfx::LGFXBase& gfx) {
     }
   }
 
-  if (label_count == 0) {
+  // Focus-airport pass: render the GA field currently under focus. Its
+  // runways + label are added on top of the large-airport pass. Skipped
+  // entirely when Home or a large-airport (SFO/OAK/SJC) is the focus.
+  int focus_extras_labeled_idx = -1;
+  for (size_t i = 0; i < data::focus_airports::kAirportCount; ++i) {
+    if (focusMatches(data::focus_airports::kAirports[i].ident)) {
+      focus_extras_labeled_idx = static_cast<int>(i);
+      break;
+    }
+  }
+  for (size_t i = 0;
+       focus_extras_labeled_idx >= 0 &&
+       i < data::focus_airports::kRunwayCount;
+       ++i) {
+    const auto& rw = data::focus_airports::kRunways[i];
+    if (rw.airport_idx != focus_extras_labeled_idx) continue;
+    drawRunwayLineT(gfx, rw);
+  }
+
+  if (label_count == 0 && focus_extras_labeled_idx < 0) {
     return;
   }
 
   initRunwayLabelStyle(gfx);
   applyRunwayLabelStyle(gfx);
   for (size_t i = 0; i < label_count; ++i) {
-    drawAirportLabel(gfx, data::large_airports::kAirports[label_airports[i]]);
+    drawAirportLabelT(gfx, data::large_airports::kAirports[label_airports[i]]);
+  }
+  if (focus_extras_labeled_idx >= 0) {
+    drawAirportLabelT(gfx,
+                      data::focus_airports::kAirports[focus_extras_labeled_idx]);
   }
 }
 

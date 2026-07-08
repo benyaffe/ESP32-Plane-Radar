@@ -1121,21 +1121,8 @@ void drawCrosshairs(int cx, int cy, int radius, uint16_t color) {
 
 void drawCenterDot(int cx, int cy) {
   s_draw->fillSmoothCircle(cx, cy, radar::kCenterDotRadius, radar::kColorCenter);
-  // When focused on an airport (not Home), label the center with its ICAO/
-  // short name — the "you are focused on X" reminder for airports too small
-  // to appear in the general large-airports overlay (SQL, HAF, PAO, HWD).
-  const auto& fp = services::focus::current();
-  if (!fp.is_home) {
-    s_draw->setFont(&fonts::FreeSansBold9pt7b);
-    s_draw->setTextSize(1);
-    const int th = s_draw->fontHeight();
-    s_draw->setTextDatum(textdatum_t::top_center);
-    s_draw->setTextColor(radar::kColorRunwayLabel, radar::kColorBackground);
-    const int y = cy + radar::kCenterDotRadius + 3;
-    s_draw->drawString(fp.name, cx, y);
-    const int tw = s_draw->textWidth(fp.name);
-    labels::add(cx - tw / 2 - 1, y - 1, tw + 2, th + 2);
-  }
+  // Focused-airport ICAO label now comes from the runway overlay
+  // (large airports + focus extras). No extra text needed here.
 }
 
 void drawCardinalLabels() {
