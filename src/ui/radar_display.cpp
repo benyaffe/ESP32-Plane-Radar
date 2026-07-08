@@ -560,56 +560,103 @@ void predictScreenPos(const services::adsb::Aircraft& p, int cur_x, int cur_y,
   *out_y = cur_y - static_cast<int>(std::lroundf(dist_px * cosf(rad)));
 }
 
+// Which side of the anchor the line sits on. Same rule for both lines within
+// a tag; picked from the slot's datum to point AWAY from the aircraft.
+enum class TagAlign : uint8_t { Left, Right, Center };
+
+TagAlign alignFromDatum(textdatum_t d) {
+  switch (d) {
+    case textdatum_t::middle_right:
+    case textdatum_t::top_right:
+    case textdatum_t::bottom_right:
+      return TagAlign::Right;
+    case textdatum_t::top_center:
+    case textdatum_t::middle_center:
+    case textdatum_t::bottom_center:
+      return TagAlign::Center;
+    default:
+      return TagAlign::Left;
+  }
+}
+
 struct TagPlacement {
   int anchor_x;
   int anchor_y;
-  int rect_x;
-  int rect_y;
-  int rect_w;
-  int rect_h;
+  int rect_x;    // bounding-box left (widest of the two lines)
+  int rect_y;    // bounding-box top
+  int rect_w;    // bounding-box width  (= max of line1_w, line2_full_w)
+  int rect_h;    // bounding-box height (= 2 line-heights)
+  int line1_w;   // actual line-1 text extent
+  int line2_w;   // actual line-2 group (text + optional trend) extent
   textdatum_t datum;
+  TagAlign align;
   uint8_t slot;
   TagContent content;
 };
 
-int tagWidth(const TagContent& c) {
-  int line1_w = c.line1[0] != '\0' ? s_draw->textWidth(c.line1) : 0;
-  int line2_w = c.line2[0] != '\0' ? s_draw->textWidth(c.line2) : 0;
-  if (c.draw_trend) line2_w += kTrendGap + kTrendGlyphW;
-  return std::max(line1_w, line2_w);
+int tagLine1Width(const TagContent& c) {
+  return c.line1[0] != '\0' ? s_draw->textWidth(c.line1) : 0;
 }
 
+int tagLine2Width(const TagContent& c) {
+  int w = c.line2[0] != '\0' ? s_draw->textWidth(c.line2) : 0;
+  if (c.draw_trend) w += kTrendGap + kTrendGlyphW;
+  return w;
+}
+
+// The tag's two lines can be different widths, so the "envelope" is an
+// L-shape: line 1 on top spanning line1_w, line 2 on bottom spanning
+// line2_w, both flush with the anchor-side edge of the bounding box.
+// For collision checking we still walk both sub-rects (via labels::add
+// twice in draw), but placement quick-rejects on the union so we don't
+// have to enumerate combinations here.
 bool tryPlaceSlot(uint8_t slot, int ax, int ay, const TagContent& c,
                   int px, int py, TagPlacement* out) {
   applyTagStyle();
   const int line_h = s_draw->fontHeight();
-  const int w = tagWidth(c);
+  const int l1_w = tagLine1Width(c);
+  const int l2_w = tagLine2Width(c);
+  const int max_w = std::max(l1_w, l2_w);
   const int h = line_h * 2;
   const SlotDef& s = kSlots[slot];
   const int anchor_x = ax + s.dx;
   const int anchor_y = ay + s.dy;
   int off_x = 0;
   int off_y = 0;
-  datumTopLeftOffset(s.datum, w, h, &off_x, &off_y);
+  datumTopLeftOffset(s.datum, max_w, h, &off_x, &off_y);
   const int left = anchor_x + off_x;
   const int top = anchor_y + off_y;
-  // Reject if it would clip off-screen or off-disc.
   if (left < 1 || top < 1 ||
-      left + w >= radar::kSize - 1 || top + h >= radar::kSize - 1) {
+      left + max_w >= radar::kSize - 1 || top + h >= radar::kSize - 1) {
     return false;
   }
-  // Predicted-position check: also make sure the tag rect doesn't intersect
-  // an area the aircraft (or another aircraft) will occupy in a few frames.
-  (void)px;  // predicted position collision is baked into labels:: registry
+  const TagAlign align = alignFromDatum(s.datum);
+  // Sub-rect for line 2 (the shorter line). If the two lines share the same
+  // width no L-shape and the check reduces to the bounding rect.
+  int line1_left = left;
+  int line2_left = left;
+  if (align == TagAlign::Right) {
+    line2_left = left + max_w - l2_w;
+  } else if (align == TagAlign::Center) {
+    line2_left = left + (max_w - l2_w) / 2;
+  }
+  (void)px;  // predicted position keep-outs are already in labels::
   (void)py;
-  if (labels::intersects(left, top, w, h)) return false;
+  // Reject only if a filled sub-rect collides — the empty corner of the L
+  // is free real estate for other elements.
+  if (labels::intersects(line1_left, top, l1_w, line_h)) return false;
+  if (l2_w > 0 &&
+      labels::intersects(line2_left, top + line_h, l2_w, line_h)) return false;
   out->anchor_x = anchor_x;
   out->anchor_y = anchor_y;
   out->rect_x = left;
   out->rect_y = top;
-  out->rect_w = w;
+  out->rect_w = max_w;
   out->rect_h = h;
+  out->line1_w = l1_w;
+  out->line2_w = l2_w;
   out->datum = s.datum;
+  out->align = align;
   out->slot = slot;
   out->content = c;
   return true;
@@ -647,30 +694,58 @@ void drawLeaderLine(int icon_x, int icon_y, int anchor_x, int anchor_y) {
   s_draw->drawLine(sx, sy, anchor_x, anchor_y, radar::kColorLabel);
 }
 
+// Compute the (x) origin of a text/glyph group of the given width inside a
+// max_w-wide row, given the tag alignment. Left-align → 0 offset; right-align
+// → flush to right edge; center-align → centered.
+int alignOffset(TagAlign a, int max_w, int piece_w) {
+  switch (a) {
+    case TagAlign::Right:  return max_w - piece_w;
+    case TagAlign::Center: return (max_w - piece_w) / 2;
+    default:               return 0;
+  }
+}
+
 void drawTagPlacement(int icon_x, int icon_y, const TagPlacement& tp) {
-  drawLeaderLine(icon_x, icon_y, tp.anchor_x, tp.anchor_y);
   applyTagStyle();
   const int line_h = s_draw->fontHeight();
   const TagContent& c = tp.content;
   s_draw->setTextDatum(textdatum_t::top_left);
 
+  const int line1_x = tp.rect_x + alignOffset(tp.align, tp.rect_w, tp.line1_w);
+  const int line2_x = tp.rect_x + alignOffset(tp.align, tp.rect_w, tp.line2_w);
+
+  // Leader connects the icon to the tag's near edge. With aligned lines the
+  // "near edge" is a straight vertical (or horizontal for N/S slots) side,
+  // and the leader ends flush with it — no dangling gap regardless of which
+  // line is longer.
+  int leader_end_x = tp.anchor_x;
+  int leader_end_y = tp.anchor_y;
+  (void)line2_x;  // used for text placement below
+  drawLeaderLine(icon_x, icon_y, leader_end_x, leader_end_y);
+
   if (c.line1[0] != '\0') {
     s_draw->setTextColor(radar::kColorLabel, radar::kColorBackground);
-    s_draw->drawString(c.line1, tp.rect_x, tp.rect_y);
+    s_draw->drawString(c.line1, line1_x, tp.rect_y);
   }
   if (c.line2[0] != '\0') {
     const int line2_y = tp.rect_y + line_h;
     s_draw->setTextColor(c.line2_color, radar::kColorBackground);
-    s_draw->drawString(c.line2, tp.rect_x, line2_y);
+    s_draw->drawString(c.line2, line2_x, line2_y);
     if (c.draw_trend) {
       const int text_w = s_draw->textWidth(c.line2);
-      const int glyph_left = tp.rect_x + text_w + kTrendGap;
+      const int glyph_left = line2_x + text_w + kTrendGap;
       const int glyph_top =
           line2_y + (line_h - kTrendGlyphH) / 2;
       drawTrendGlyph(glyph_left, glyph_top, c.trend_up, c.line2_color);
     }
   }
-  labels::add(tp.rect_x - 1, tp.rect_y - 1, tp.rect_w + 2, tp.rect_h + 2);
+  // Register the two lines as SEPARATE rects so the L-shape's empty corner
+  // is free for other placements (later tags, icons, coastline lines, etc.).
+  labels::add(line1_x - 1, tp.rect_y - 1, tp.line1_w + 2, line_h + 2);
+  if (tp.line2_w > 0) {
+    labels::add(line2_x - 1, tp.rect_y + line_h - 1, tp.line2_w + 2,
+                line_h + 2);
+  }
 }
 
 struct AircraftDrawItem {
