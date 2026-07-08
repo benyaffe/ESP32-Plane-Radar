@@ -98,6 +98,14 @@ bool isOnGround(JsonObjectConst p) {
   return std::strcmp(p["alt_baro"].as<const char*>(), "ground") == 0;
 }
 
+uint16_t pickSquawk(JsonObjectConst p) {
+  if (p["squawk"].is<const char*>()) {
+    const char* s = p["squawk"].as<const char*>();
+    if (s && s[0] != '\0') return static_cast<uint16_t>(std::atoi(s));
+  }
+  return 0;
+}
+
 void copyStringTrimmed(JsonObjectConst obj, const char* key, char* out,
                        size_t out_len) {
   out[0] = '\0';
@@ -193,6 +201,7 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
                       sizeof(s_aircraft[n].type));
     s_aircraft[n].alt_ft = pickAltitudeFt(plane);
     s_aircraft[n].vs_fpm = pickVerticalRate(plane);
+    s_aircraft[n].squawk = pickSquawk(plane);
     ++n;
   }
   s_count = n;

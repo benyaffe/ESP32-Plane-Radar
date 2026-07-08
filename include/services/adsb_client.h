@@ -13,6 +13,7 @@ struct Aircraft {
   float gs_knots;
   float vs_fpm;   // Barometric or geometric vertical rate, ft/min. 0 if unknown.
   int32_t alt_ft; // Integer altitude in feet, or INT32_MIN for on-ground / unknown.
+  uint16_t squawk; // Transponder code as a 4-digit decimal (e.g. 7700). 0 if unknown.
   char callsign[9];
   char type[5];
 };

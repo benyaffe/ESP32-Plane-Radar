@@ -188,6 +188,14 @@ float pickVerticalRate(const JsonObject& plane) {
   return 0.0f;
 }
 
+uint16_t pickSquawk(const JsonObject& plane) {
+  if (plane["squawk"].is<const char*>()) {
+    const char* s = plane["squawk"].as<const char*>();
+    if (s && s[0] != '\0') return static_cast<uint16_t>(atoi(s));
+  }
+  return 0;
+}
+
 void fillTagFields(Aircraft* ac, const JsonObject& plane) {
   // Callsign preference: flight (dispatch callsign, e.g. UAL1234) →
   // registration / tail number (e.g. N12345) → hex ICAO transponder code
@@ -202,6 +210,7 @@ void fillTagFields(Aircraft* ac, const JsonObject& plane) {
   copyJsonStringTrimmed(plane, "t", ac->type, sizeof(ac->type));
   ac->alt_ft = pickAltitudeFt(plane);
   ac->vs_fpm = pickVerticalRate(plane);
+  ac->squawk = pickSquawk(plane);
 }
 
 }  // namespace

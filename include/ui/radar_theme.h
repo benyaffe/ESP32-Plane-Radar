@@ -106,5 +106,7 @@ extern uint16_t kColorTagAltitude;
 extern uint16_t kColorRunway;
 extern uint16_t kColorRunwayLabel;
 extern uint16_t kColorLand;
+/** Squawking 7500 / 7600 / 7700 — symbol, vector, and "EM" tag glyph. */
+extern uint16_t kColorEmergency;
 
 }  // namespace ui::radar

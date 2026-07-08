@@ -34,6 +34,7 @@ uint16_t kColorTagAltitude = 0xFFE0;
 uint16_t kColorRunway = 0x4D5F;
 uint16_t kColorRunwayLabel = 0x7DFF;
 uint16_t kColorLand = 0x0824;  // ~RGB(12, 20, 36) after color565 init
+uint16_t kColorEmergency = 0xF800;  // pure red
 
 }  // namespace radar
 
@@ -200,6 +201,16 @@ void initPalette() {
                                           radar::kRunwayLabelB);
   radar::kColorLand =
       tft.color565(radar::kLandR, radar::kLandG, radar::kLandB);
+  // Emergency: pure red on both platforms. On native (SDL) we want plain
+  // RGB — no swap. On hardware (BGR panel per config::kDisplayRgbOrder)
+  // we pre-swap so the panel's own swap yields red.
+#ifdef USE_NATIVE
+  radar::kColorEmergency = tft.color565(255, 0, 0);
+#else
+  radar::kColorEmergency = config::kDisplayRgbOrder
+      ? tft.color565(0, 0, 255)
+      : tft.color565(255, 0, 0);
+#endif
 }
 
 constexpr float kKmPerDeg = 111.0f;
@@ -383,6 +394,7 @@ void applyTagStyle() {
 
 // Forward-declared below; used by tag placement now.
 void datumTopLeftOffset(textdatum_t d, int tw, int th, int* dx, int* dy);
+inline bool isEmergency(uint16_t squawk);
 
 // Format altitude in ATC-standard hundreds of feet (e.g. 015 = 1500 ft,
 // 350 = FL350). Ground → "GND". Unknown → empty string.
@@ -450,13 +462,18 @@ struct TagContent {
   bool line2_is_alt;
   bool draw_trend;
   bool trend_up;
+  bool emergency;     // squawk in {7500,7600,7700}
   uint16_t line2_color;
 };
+
+constexpr int kEmergencyGap = 2;
+inline int emGlyphWidth() { return s_draw->textWidth("EM"); }
 
 TagContent buildTagContent(const services::adsb::Aircraft& p, bool show_alt) {
   TagContent c{};
   c.line1 = p.callsign[0] != '\0' ? p.callsign : "";
   c.draw_trend = false;
+  c.emergency = isEmergency(p.squawk);
   if (show_alt) {
     c.line2_is_alt = true;
     c.line2_color = radar::kColorTagAltitude;
@@ -639,6 +656,9 @@ int tagLine1Width(const TagContent& c) {
 int tagLine2Width(const TagContent& c) {
   int w = c.line2[0] != '\0' ? s_draw->textWidth(c.line2) : 0;
   if (c.draw_trend) w += kTrendGap + kTrendGlyphW;
+  // Reserve room for "EM" in the opposite corner. Bounding-box only —
+  // actual glyph positioning happens in drawTagPlacement.
+  if (c.emergency) w += kEmergencyGap + emGlyphWidth();
   return w;
 }
 
@@ -762,7 +782,13 @@ void drawTagPlacement(int icon_x, int icon_y, const TagPlacement& tp) {
   s_draw->setTextDatum(textdatum_t::top_left);
 
   const int line1_x = tp.rect_x + alignOffset(tp.align, tp.rect_w, tp.line1_w);
-  const int line2_x = tp.rect_x + alignOffset(tp.align, tp.rect_w, tp.line2_w);
+  // For line 2 alignment we want the alt/type group to hug the leader edge
+  // even when an EM tag is reserved on the other side. Use text-only width
+  // for the alignment so EM sits in the free corner.
+  int alt_type_w = c.line2[0] != '\0' ? s_draw->textWidth(c.line2) : 0;
+  if (c.draw_trend) alt_type_w += kTrendGap + kTrendGlyphW;
+  const int line2_x =
+      tp.rect_x + alignOffset(tp.align, tp.rect_w, alt_type_w);
 
   // Leader connects the icon to the tag's near edge. With aligned lines the
   // "near edge" is a straight vertical (or horizontal for N/S slots) side,
@@ -789,6 +815,18 @@ void drawTagPlacement(int icon_x, int icon_y, const TagPlacement& tp) {
       drawTrendGlyph(glyph_left, glyph_top, c.trend_up, c.line2_color);
     }
   }
+  if (c.emergency) {
+    // "EM" goes in the corner OPPOSITE the alt/type group — free space of
+    // the L-shape. For a left-aligned tag alt/type is on the left, so EM
+    // sits at the right; for right-aligned, EM sits on the left.
+    const int line2_y = tp.rect_y + line_h;
+    const int em_w = emGlyphWidth();
+    const int em_x = (tp.align == TagAlign::Right)
+                         ? tp.rect_x
+                         : tp.rect_x + tp.rect_w - em_w;
+    s_draw->setTextColor(radar::kColorEmergency, radar::kColorBackground);
+    s_draw->drawString("EM", em_x, line2_y);
+  }
   // Register the two lines as SEPARATE rects so the L-shape's empty corner
   // is free for other placements (later tags, icons, coastline lines, etc.).
   labels::add(line1_x - 1, tp.rect_y - 1, tp.line1_w + 2, line_h + 2);
@@ -811,6 +849,13 @@ struct BeyondDotDrawItem {
   int dist_sq = 0;
 };
 
+// FAA emergency squawk codes: 7500 hijack, 7600 comm failure, 7700 general
+// emergency. Anything with one of these gets red rendering + a priority
+// tag slot + an "EM" annotation.
+inline bool isEmergency(uint16_t squawk) {
+  return squawk == 7500 || squawk == 7600 || squawk == 7700;
+}
+
 // "How interesting is this aircraft on a spectator's radar toy?"
 // - Altitude in feet: high-flying commercial traffic wins.
 // - Ground speed × 20 ft-equivalent: fast movers rise up the list.
@@ -820,7 +865,10 @@ struct BeyondDotDrawItem {
 float clarityScore(const services::adsb::Aircraft& p) {
   const float alt =
       (p.alt_ft == INT32_MIN) ? 0.0f : static_cast<float>(p.alt_ft);
-  return alt + p.gs_knots * 20.0f + std::fabs(p.vs_fpm) / 5.0f;
+  float score = alt + p.gs_knots * 20.0f + std::fabs(p.vs_fpm) / 5.0f;
+  // Emergency squawks always float to the top of the tag budget.
+  if (isEmergency(p.squawk)) score += 1.0e9f;
+  return score;
 }
 
 // Cap the number of full tags per frame, scaled to range preset. Wide views
@@ -914,9 +962,12 @@ void drawAircraft() {
     const size_t i = items[d].index;
     const int x = items[d].x;
     const int y = items[d].y;
+    const bool em = isEmergency(planes[i].squawk);
     drawSpeedVector(x, y, planes[i].nose_deg, planes[i].track_deg,
-                    planes[i].gs_knots, radar::kColorTrackVector);
-    drawHeadingTriangle(x, y, planes[i].nose_deg, radar::kColorAircraft);
+                    planes[i].gs_knots,
+                    em ? radar::kColorEmergency : radar::kColorTrackVector);
+    drawHeadingTriangle(x, y, planes[i].nose_deg,
+                        em ? radar::kColorEmergency : radar::kColorAircraft);
     predictScreenPos(planes[i], x, y, &pred_x[d], &pred_y[d]);
     // Icon keep-out (current position) — ~14×14 around symbol center.
     labels::add(x - 8, y - 8, 16, 16);
@@ -967,8 +1018,19 @@ void drawAircraft() {
 
   gcTagMemory();
   const bool show_alt = tagShowsAltitude();
+  // Emergency aircraft (score bumped by 1e9 in clarityScore) always tag
+  // regardless of budget. Count them separately so a bunch of emergency
+  // squawks can't eat everyone's slot; base budget still applies to normal
+  // traffic after.
+  size_t emergency_n = 0;
+  for (size_t k = 0; k < scored_n; ++k) {
+    const size_t i = items[scored[k].d].index;
+    if (!isEmergency(planes[i].squawk)) break;
+    ++emergency_n;
+  }
   const size_t tag_limit =
-      std::min(scored_n, static_cast<size_t>(tagBudget()));
+      std::min(scored_n,
+               emergency_n + static_cast<size_t>(tagBudget()));
   for (size_t k = 0; k < tag_limit; ++k) {
     const size_t d = scored[k].d;
     const size_t i = items[d].index;
