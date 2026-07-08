@@ -761,6 +761,29 @@ struct BeyondDotDrawItem {
   int dist_sq = 0;
 };
 
+// "How interesting is this aircraft on a spectator's radar toy?"
+// - Altitude in feet: high-flying commercial traffic wins.
+// - Ground speed × 20 ft-equivalent: fast movers rise up the list.
+// - |vs| ÷ 5: climbers/descenders (takeoff / on-final) get a modest boost.
+// Result is a coarse composite that reliably floats jets above pattern
+// GA at wide zooms without needing airport lookups or explicit filters.
+float clarityScore(const services::adsb::Aircraft& p) {
+  const float alt =
+      (p.alt_ft == INT32_MIN) ? 0.0f : static_cast<float>(p.alt_ft);
+  return alt + p.gs_knots * 20.0f + std::fabs(p.vs_fpm) / 5.0f;
+}
+
+// Cap the number of full tags per frame, scaled to range preset. Wide views
+// (25 nm) → few tags so the interesting traffic stands out; narrow views
+// (5 nm) → generous budget because we've zoomed in specifically to poke at
+// what's happening locally. Untagged aircraft still draw their symbol +
+// track vector so the density is visible; they just don't clutter with text.
+int tagBudget() {
+  static constexpr int kBudget[] = {20, 15, 10, 6};  // per preset index 0..3
+  const uint8_t idx = radar::rangeIndex();
+  return kBudget[idx < 4 ? idx : 3];
+}
+
 void sortDrawItemsFarFirst(AircraftDrawItem* items, size_t count) {
   for (size_t i = 1; i < count; ++i) {
     const AircraftDrawItem key = items[i];
@@ -863,16 +886,42 @@ void drawAircraft() {
     }
   }
 
-  // Second pass: place + draw tags. Placement dodges anything registered in
-  // labels:: (grid text, airport labels, aircraft icons/vectors, prior tags).
-  gcTagMemory();
-  const bool show_alt = tagShowsAltitude();
+  // Second pass: score aircraft by "how interesting" and only tag the top N
+  // (budget scales with range preset). Untagged planes still render with
+  // symbol + track vector so the density stays visible, they just don't
+  // add text clutter to the frame.
+  struct Scored {
+    uint8_t d;
+    float score;
+  };
+  Scored scored[services::adsb::kMaxAircraft];
+  size_t scored_n = 0;
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
     if (planes[i].callsign[0] == '\0' && planes[i].type[0] == '\0' &&
         planes[i].alt_ft == INT32_MIN) {
-      continue;
+      continue;  // nothing to say about this one
     }
+    scored[scored_n++] = {static_cast<uint8_t>(d), clarityScore(planes[i])};
+  }
+  // Insertion sort by score DESC (small n, same style as other sorts here).
+  for (size_t i = 1; i < scored_n; ++i) {
+    const Scored key = scored[i];
+    size_t j = i;
+    while (j > 0 && scored[j - 1].score < key.score) {
+      scored[j] = scored[j - 1];
+      --j;
+    }
+    scored[j] = key;
+  }
+
+  gcTagMemory();
+  const bool show_alt = tagShowsAltitude();
+  const size_t tag_limit =
+      std::min(scored_n, static_cast<size_t>(tagBudget()));
+  for (size_t k = 0; k < tag_limit; ++k) {
+    const size_t d = scored[k].d;
+    const size_t i = items[d].index;
     TagContent content = buildTagContent(planes[i], show_alt);
     TagPlacement tp;
     if (pickTagPlacement(planes[i], items[d].x, items[d].y, pred_x[d],
