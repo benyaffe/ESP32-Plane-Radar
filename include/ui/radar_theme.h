@@ -88,6 +88,12 @@ constexpr uint8_t kRunwayB = 170;
 constexpr uint8_t kRunwayLabelR = 110;
 constexpr uint8_t kRunwayLabelG = 210;
 constexpr uint8_t kRunwayLabelB = 230;
+/** Landmass tint — barely brighter than the background so ocean/water reads
+ *  as the dark negative space. Keep this SUBTLE — it's SA context, not a
+ *  focal element. Tweak alongside layer opacity in M4. */
+constexpr uint8_t kLandR = 12;
+constexpr uint8_t kLandG = 20;
+constexpr uint8_t kLandB = 36;
 
 extern uint16_t kColorBackground;
 extern uint16_t kColorGrid;
@@ -99,5 +105,6 @@ extern uint16_t kColorTagType;
 extern uint16_t kColorTagAltitude;
 extern uint16_t kColorRunway;
 extern uint16_t kColorRunwayLabel;
+extern uint16_t kColorLand;
 
 }  // namespace ui::radar

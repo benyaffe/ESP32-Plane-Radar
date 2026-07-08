@@ -13,6 +13,7 @@
 #include "services/radar_location.h"
 #include "ui/coastline_overlay.h"
 #include "ui/label_layout.h"
+#include "ui/land_overlay.h"
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
 #include "ui/runway_overlay.h"
@@ -32,6 +33,7 @@ uint16_t kColorTagType = 0x5DFF;
 uint16_t kColorTagAltitude = 0xFFE0;
 uint16_t kColorRunway = 0x4D5F;
 uint16_t kColorRunwayLabel = 0x7DFF;
+uint16_t kColorLand = 0x0824;  // ~RGB(12, 20, 36) after color565 init
 
 }  // namespace radar
 
@@ -196,6 +198,8 @@ void initPalette() {
       tft.color565(radar::kRunwayR, radar::kRunwayG, radar::kRunwayB);
   radar::kColorRunwayLabel = tft.color565(radar::kRunwayLabelR, radar::kRunwayLabelG,
                                           radar::kRunwayLabelB);
+  radar::kColorLand =
+      tft.color565(radar::kLandR, radar::kLandG, radar::kLandB);
 }
 
 constexpr float kKmPerDeg = 111.0f;
@@ -716,12 +720,17 @@ void drawStaticGrid(Gfx& gfx) {
   const int grid_r = radar::kGridOuterRadius;
 
   gfx.fillScreen(radar::kColorBackground);
+  initPalette();
+  // Land goes down FIRST — under the grid, coastline, labels, aircraft.
+  // Triangles may spill past the outer ring; the fillArc mask below then
+  // paints the ring's exterior back to background, so the disc reads clean.
+  land::draw(gfx);
+  gfx.fillArc(cx, cy, radar::kSize, grid_r + 1, 0, 360,
+              radar::kColorBackground);
   drawRings(cx, cy, grid_r);
   drawCrosshairs(cx, cy, grid_r, radar::kColorGrid);
-  initPalette();
-  // Coastline sits below all labels + runways so those draw on top for
-  // legibility. No labels to register, so its order among the label-emitting
-  // draws doesn't matter.
+  // Coastline sits over the land tint (delineates the boundary) and under
+  // labels/aircraft. No labels to register.
   coastline::draw(gfx);
   // Order among these matters: cardinals + airports register bounding rects
   // with labels::, then the scale label dodges around them.
