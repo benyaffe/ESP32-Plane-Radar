@@ -27,7 +27,7 @@ this scale, forever.
     | Project name                         | `plane-radar` (becomes part of the URL)  |
     | Build command                        | `cd web && npm install && npm run build` |
     | Deploy command                       | `cd web && npx wrangler deploy`          |
-    | Builds for non-production branches   | ✅ checked (default)                      |
+    | Builds for non-production branches   | leave checked (default)                  |
     | Non-production branch deploy command | `cd web && npx wrangler versions upload` |
     | Path                                 | *(leave blank — repo root)*              |
 
