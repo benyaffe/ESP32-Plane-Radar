@@ -47,8 +47,12 @@ jobs:
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: 92df9535-be52-4c0e-8644-2534076b362d
+        # --functions=netlify/functions ships the ADS-B proxy alongside
+        # the static assets. Without it, only dist/ deploys and
+        # /api/adsb returns 404 because the function was never sent.
         run: |
           npx --yes netlify-cli@26 deploy \
             --prod \
             --dir dist \
+            --functions netlify/functions \
             --message "GH Actions: ${{ github.sha }}"

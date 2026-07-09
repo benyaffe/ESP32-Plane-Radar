@@ -1,24 +1,30 @@
-// Netlify Function replacing the Cloudflare Worker at /api/adsb —
-// proxies ADS-B data so the browser bypasses CORS and IP blocks.
-// Two peers tried in order (airplanes.live primary, adsb.fi fallback),
-// 4 s timeout each so a dead source can't stall the client's 3 s poll.
+// Netlify Function (v1 handler API) — proxy for opendata.adsb.fi + airplanes.live.
+//
+// Sticks to the v1 `export const handler` signature because the v2
+// `export default` API + `config.path` route registration wouldn't
+// resolve on our site's runtime (function was in the deploy manifest
+// but every URL returned 404). v1 is universally supported and works
+// with the plain function URL `/.netlify/functions/adsb`; the site's
+// [[redirects]] rule in netlify.toml aliases /api/adsb to it.
 
-export default async (req: Request): Promise<Response> => {
-  const url = new URL(req.url);
-  const lat = parseFloat(url.searchParams.get("lat") ?? "");
-  const lon = parseFloat(url.searchParams.get("lon") ?? "");
-  const nm = parseFloat(url.searchParams.get("nm") ?? "25");
+export const handler = async (event) => {
+  const p = event.queryStringParameters ?? {};
+  const lat = parseFloat(p.lat ?? "");
+  const lon = parseFloat(p.lon ?? "");
+  const nm = parseFloat(p.nm ?? "25");
   if (!isFinite(lat) || !isFinite(lon) || !isFinite(nm)) {
     return json({ error: "lat, lon, nm are required numeric query params" }, 400);
   }
   if (nm <= 0 || nm > 250) {
     return json({ error: "nm out of range" }, 400);
   }
+
   const upstreams = [
     `https://api.airplanes.live/v2/point/${lat.toFixed(4)}/${lon.toFixed(4)}/${nm.toFixed(1)}`,
     `https://opendata.adsb.fi/api/v3/lat/${lat.toFixed(4)}/lon/${lon.toFixed(4)}/dist/${nm.toFixed(1)}`,
   ];
-  let resp: Response | null = null;
+
+  let body = null;
   let lastStatus = 0;
   for (const upstream of upstreams) {
     const ctrl = new AbortController();
@@ -31,7 +37,7 @@ export default async (req: Request): Promise<Response> => {
         },
         signal: ctrl.signal,
       });
-      if (r.ok) { resp = r; break; }
+      if (r.ok) { body = await r.text(); break; }
       lastStatus = r.status;
     } catch {
       lastStatus = 599;
@@ -39,28 +45,27 @@ export default async (req: Request): Promise<Response> => {
       clearTimeout(t);
     }
   }
-  if (!resp) {
+  if (body === null) {
     return json({ error: `upstream ${lastStatus}` }, 502);
   }
-  const body = await resp.text();
-  return new Response(body, {
-    status: 200,
+  return {
+    statusCode: 200,
     headers: {
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
       "Cache-Control": "no-store",
     },
-  });
+    body,
+  };
 };
 
-function json(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
+function json(payload, statusCode = 200) {
+  return {
+    statusCode,
     headers: {
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
     },
-  });
+    body: JSON.stringify(payload),
+  };
 }
-
-export const config = { path: "/api/adsb" };
