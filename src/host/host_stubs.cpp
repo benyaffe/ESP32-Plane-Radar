@@ -283,28 +283,33 @@ void bootButtonPollLongPress() {
   // when we have no persistent WiFi credentials to reset.
 }
 
-// Same double-tap discriminator as the firmware. Native uses SPACE (BOOT
-// pin fake GPIO) for taps.
+// Tap-count discriminator. Waits kMultiTapWindowMs after the LAST tap; if
+// no further taps arrive, dispatches by count. Supporting Triple pushes
+// Single-tap latency from the old 250 ms up to ~400 ms — real cost, but
+// keeps the "single = the common thing, double/triple = escalating"
+// single-button model intact.
 BootTap bootButtonConsumeEvent() {
-  constexpr unsigned long kDoubleTapWindowMs = 250;
-  static bool s_pending_single = false;
-  static unsigned long s_first_tap_ms = 0;
+  constexpr unsigned long kMultiTapWindowMs = 400;
+  static uint8_t s_pending_count = 0;
+  static unsigned long s_last_tap_ms = 0;
 
   const bool tap = bootButtonConsumeTap();
   const unsigned long now = millis();
 
   if (tap) {
-    if (s_pending_single && (now - s_first_tap_ms) <= kDoubleTapWindowMs) {
-      s_pending_single = false;
-      return BootTap::Double;
+    ++s_pending_count;
+    s_last_tap_ms = now;
+    // Triple fires immediately — no reason to wait for a hypothetical 4th.
+    if (s_pending_count >= 3) {
+      s_pending_count = 0;
+      return BootTap::Triple;
     }
-    s_pending_single = true;
-    s_first_tap_ms = now;
     return BootTap::None;
   }
-  if (s_pending_single && (now - s_first_tap_ms) > kDoubleTapWindowMs) {
-    s_pending_single = false;
-    return BootTap::Single;
+  if (s_pending_count > 0 && (now - s_last_tap_ms) > kMultiTapWindowMs) {
+    const uint8_t n = s_pending_count;
+    s_pending_count = 0;
+    return n == 1 ? BootTap::Single : BootTap::Double;
   }
   return BootTap::None;
 }

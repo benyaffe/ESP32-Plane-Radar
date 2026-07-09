@@ -19,8 +19,12 @@ bool bootButtonConsumeTap();
 /** Call each loop iteration; triggers WiFi reset on long hold. */
 void bootButtonPollLongPress();
 
-/** Tap-pattern discriminator. Single = cycle focus, Double = cycle range. */
-enum class BootTap : uint8_t { None, Single, Double };
+/** Tap-pattern discriminator.
+ *  Single = cycle range, Double = cycle focus, Triple = enter/exit
+ *  weather-map view. Discrimination window is ~400 ms — the tradeoff for
+ *  triple support is that Single fires ~150 ms later than the earlier
+ *  single-vs-double-only design. */
+enum class BootTap : uint8_t { None, Single, Double, Triple };
 /** Consume the pending tap event (if any). Call once per loop after
- *  bootButtonPollLongPress(). Double-tap window is ~250 ms. */
+ *  bootButtonPollLongPress(). */
 BootTap bootButtonConsumeEvent();

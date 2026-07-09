@@ -26,10 +26,13 @@
 #include "ui/layer_style.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
+#include "ui/weather_map.h"
 
 namespace {
 
 constexpr uint8_t kShotFakeGpio = 10;
+bool g_weather_mode = false;
+unsigned long g_last_weather_draw_ms = 0;
 constexpr const char* kShotPath = "/tmp/plane-radar-screenshot.ppm";
 constexpr unsigned long kAutoShotIntervalMs = 200;
 
@@ -74,6 +77,20 @@ void onFocusTap() {
   ui::radarDisplayDraw();
 }
 
+void enterWeatherMode() {
+  g_weather_mode = true;
+  std::printf("View: weather\n");
+  ui::weather::refresh();
+  ui::weather::draw();
+  g_last_weather_draw_ms = millis();
+}
+
+void exitWeatherMode() {
+  g_weather_mode = false;
+  std::printf("View: radar\n");
+  ui::radarDisplayDraw();
+}
+
 bool consumeShotKey() {
   static bool prev_pressed = false;
   const bool now = !lgfx::v1::gpio_in(kShotFakeGpio);  // active low
@@ -114,7 +131,7 @@ bool consumeLayerKey(const KeyBinding& kb) {
 void setup() {
   std::printf(
       "Plane Radar — SDL emulator\n"
-      "  SPACE  : tap  (single = cycle range, double = cycle focus)\n"
+      "  SPACE  : tap  (single = range, double = focus, triple = weather)\n"
       "  S      : save screenshot\n"
       "  1..7   : toggle layer (coastline / land / roads / airspace /\n"
       "           runways-large / runways-focus / aircraft-tags)\n");
@@ -135,16 +152,30 @@ void setup() {
   services::adsb::fetchUpdate(services::location::lat(),
                               services::location::lon(),
                               ui::radar::fetchRadiusKm());
+  // Dev shortcut: PLANE_RADAR_WEATHER=1 enters weather view on boot so
+  // snap.sh can capture it without keyboard input during testing.
+  const char* wxvar = std::getenv("PLANE_RADAR_WEATHER");
+  if (wxvar && wxvar[0] == '1') enterWeatherMode();
 }
 
 void loop() {
   static unsigned long last_shot_ms = 0;
   static unsigned long last_adsb_ms = 0;
   bootButtonPollLongPress();
-  switch (bootButtonConsumeEvent()) {
-    case BootTap::Single: onRangeTap(); break;
-    case BootTap::Double: onFocusTap(); break;
-    case BootTap::None: break;
+  const BootTap ev = bootButtonConsumeEvent();
+  if (g_weather_mode) {
+    if (ev == BootTap::Triple) {
+      enterWeatherMode();  // re-refresh
+    } else if (ev != BootTap::None) {
+      exitWeatherMode();
+    }
+  } else {
+    switch (ev) {
+      case BootTap::Single: onRangeTap(); break;
+      case BootTap::Double: onFocusTap(); break;
+      case BootTap::Triple: enterWeatherMode(); break;
+      case BootTap::None: break;
+    }
   }
   if (consumeShotKey()) {
     saveScreenshot(kShotPath);
@@ -153,19 +184,27 @@ void loop() {
   for (const auto& kb : kLayerKeys) {
     if (consumeLayerKey(kb)) {
       ui::layers::toggle(kb.layer);
-      ui::radarDisplayDraw();
+      if (!g_weather_mode) ui::radarDisplayDraw();
     }
   }
 
   const unsigned long now = millis();
-  // adsb.fi's public rate limit is 1 req/s; matching the firmware's 3 s poll.
-  if (now - last_adsb_ms >= 3000) {
-    last_adsb_ms = now;
-    services::adsb::fetchUpdate(services::location::lat(),
-                                services::location::lon(),
-                                ui::radar::fetchRadiusKm());
+  if (g_weather_mode) {
+    if (now - g_last_weather_draw_ms >= 1000) {
+      g_last_weather_draw_ms = now;
+      ui::weather::refresh();
+      ui::weather::draw();
+    }
+  } else {
+    // adsb.fi's public rate limit is 1 req/s; matching the firmware's 3 s poll.
+    if (now - last_adsb_ms >= 3000) {
+      last_adsb_ms = now;
+      services::adsb::fetchUpdate(services::location::lat(),
+                                  services::location::lon(),
+                                  ui::radar::fetchRadiusKm());
+    }
+    ui::radarDisplayRefreshAircraft();
   }
-  ui::radarDisplayRefreshAircraft();
   if (now - last_shot_ms >= kAutoShotIntervalMs) {
     last_shot_ms = now;
     saveScreenshot(kShotPath);

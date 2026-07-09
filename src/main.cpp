@@ -15,13 +15,16 @@
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
+#include "ui/weather_map.h"
 
 namespace {
 
 bool g_radar_visible = false;
+bool g_weather_mode = false;
 unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
+unsigned long g_last_weather_draw_ms = 0;
 
 void showRadarIfConnected() {
   if (WiFi.status() != WL_CONNECTED) {
@@ -57,11 +60,40 @@ void onFocusTap() {
   }
 }
 
+void enterWeatherMode() {
+  g_weather_mode = true;
+  Serial.println("View: weather");
+  if (WiFi.status() == WL_CONNECTED) ui::weather::refresh();
+  ui::weather::draw();
+  g_last_weather_draw_ms = millis();
+}
+
+void exitWeatherMode() {
+  g_weather_mode = false;
+  Serial.println("View: radar");
+  if (g_radar_visible && WiFi.status() == WL_CONNECTED) {
+    ui::radarDisplayDraw();
+  }
+}
+
 void handleBootButton() {
   bootButtonPollLongPress();
-  switch (bootButtonConsumeEvent()) {
+  const BootTap ev = bootButtonConsumeEvent();
+  // In weather mode, ANY tap returns to radar. Triple stays as its own
+  // gesture for re-entering weather from anywhere.
+  if (g_weather_mode) {
+    if (ev == BootTap::Triple) {
+      // Force a refresh + redraw while staying in mode.
+      enterWeatherMode();
+    } else if (ev != BootTap::None) {
+      exitWeatherMode();
+    }
+    return;
+  }
+  switch (ev) {
     case BootTap::Single: onRangeTap(); break;
     case BootTap::Double: onFocusTap(); break;
+    case BootTap::Triple: enterWeatherMode(); break;
     case BootTap::None: break;
   }
 }
@@ -126,7 +158,15 @@ void loop() {
     }
   } else {
     g_wifi_down_since = 0;
-    if (!g_radar_visible) {
+    if (g_weather_mode) {
+      // Repaint the weather view every ~1s so the "n min ago" age updates
+      // smoothly; refresh() itself no-ops until the 5 min TTL expires.
+      if (millis() - g_last_weather_draw_ms >= 1000) {
+        g_last_weather_draw_ms = millis();
+        ui::weather::refresh();
+        ui::weather::draw();
+      }
+    } else if (!g_radar_visible) {
       showRadarIfConnected();
     } else if (millis() - g_last_adsb_fetch_ms >= config::kAdsbFetchIntervalMs) {
       g_last_adsb_fetch_ms = millis();
