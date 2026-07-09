@@ -76,6 +76,8 @@ const LS_KEYS = {
   home: "planeradar.home",
   metar: "planeradar.metar",
   focus: "planeradar.focusRing",
+  layers: "planeradar.layers",
+  session: "planeradar.session",  // ephemeral-ish: focusIdx, rangeIdx
 };
 
 function loadJson<T>(key: string, fallback: T, validate: (v: unknown) => v is T): T {
@@ -117,9 +119,36 @@ function isFocusRing(v: unknown): v is FocusPoint[] {
   return Array.isArray(v) && v.length >= 1 && v.every(isFocusPoint);
 }
 
+const DEFAULT_LAYERS: Record<LayerId, boolean> = {
+  coast: true,
+  land: true,
+  roads: false,   // opt-in per user preference
+  runways: true,
+  tags: true,
+};
+
+function isLayers(v: unknown): v is Record<LayerId, boolean> {
+  if (typeof v !== "object" || v === null) return false;
+  const l = v as Record<string, unknown>;
+  return typeof l.coast === "boolean" && typeof l.land === "boolean" &&
+         typeof l.roads === "boolean" && typeof l.runways === "boolean" &&
+         typeof l.tags === "boolean";
+}
+
+interface SessionState { focusIdx: number; rangeIdx: number; }
+const DEFAULT_SESSION: SessionState = { focusIdx: 0, rangeIdx: 1 };
+
+function isSession(v: unknown): v is SessionState {
+  if (typeof v !== "object" || v === null) return false;
+  const s = v as SessionState;
+  return Number.isInteger(s.focusIdx) && Number.isInteger(s.rangeIdx);
+}
+
 const loadedHome = loadJson(LS_KEYS.home, DEFAULT_HOME, isHome);
 const loadedMetar = loadJson(LS_KEYS.metar, DEFAULT_METAR, isMetar);
 const loadedFocus = loadJson(LS_KEYS.focus, DEFAULT_FOCUS_RING, isFocusRing);
+const loadedLayers = loadJson(LS_KEYS.layers, DEFAULT_LAYERS, isLayers);
+const loadedSession = loadJson(LS_KEYS.session, DEFAULT_SESSION, isSession);
 
 // If the persisted ring's first entry isn't a home slot, prepend one so
 // the "Home" cycle position always exists. isHome=true entries have their
@@ -137,25 +166,31 @@ loadedFocus[0].label = "Home";
 loadedFocus[0].lat = loadedHome.lat;
 loadedFocus[0].lon = loadedHome.lon;
 
-// Default: focus[0] = Home, radar view. Roads default OFF — the user
-// found them noisy under traffic.
+// Restore the last tap-cycled focus + range if it's still valid against
+// the current ring; otherwise fall back to Home + its default range.
+// View mode always starts on "radar" — coming back to the site is more
+// useful with the map than a stale weather / cockpit view.
+const restoredFocusIdx =
+  loadedSession.focusIdx >= 0 && loadedSession.focusIdx < loadedFocus.length
+    ? loadedSession.focusIdx
+    : 0;
+const restoredRangeIdx =
+  loadedSession.rangeIdx >= 0 && loadedSession.rangeIdx < RANGE_PRESETS.length
+    ? loadedSession.rangeIdx
+    : loadedFocus[restoredFocusIdx].defaultRangeIdx;
+const restoredFocus = loadedFocus[restoredFocusIdx];
+
 export const state: AppState = {
   home: loadedHome,
   metar: loadedMetar,
   focusRing: loadedFocus,
-  centerLat: loadedFocus[0].lat,
-  centerLon: loadedFocus[0].lon,
-  centerLabel: loadedFocus[0].label,
-  focusIdx: 0,
-  rangeIdx: loadedFocus[0].defaultRangeIdx,
+  centerLat: restoredFocus.lat,
+  centerLon: restoredFocus.lon,
+  centerLabel: restoredFocus.label,
+  focusIdx: restoredFocusIdx,
+  rangeIdx: restoredRangeIdx,
   view: "radar",
-  layers: {
-    coast: true,
-    land: true,
-    roads: false,          // opt-in per user preference
-    runways: true,
-    tags: true,
-  },
+  layers: loadedLayers,
 };
 
 type Listener = () => void;
@@ -173,8 +208,16 @@ export function notify(): void {
   for (const fn of listeners) fn();
 }
 
+function persistSession(): void {
+  window.localStorage.setItem(LS_KEYS.session, JSON.stringify({
+    focusIdx: state.focusIdx,
+    rangeIdx: state.rangeIdx,
+  }));
+}
+
 export function cycleRange(): void {
   state.rangeIdx = (state.rangeIdx + 1) % RANGE_PRESETS.length;
+  persistSession();
   notify();
 }
 
@@ -187,6 +230,7 @@ export function cycleFocus(): void {
   state.centerLon = fp.lon;
   state.centerLabel = fp.label;
   state.rangeIdx = fp.defaultRangeIdx;
+  persistSession();
   notify();
 }
 
@@ -195,6 +239,7 @@ export function setCenter(lat: number, lon: number, label: string): void {
   state.centerLon = lon;
   state.centerLabel = label;
   state.focusIdx = -1;   // typeahead picks aren't part of the ring
+  persistSession();
   notify();
 }
 
@@ -214,6 +259,7 @@ export function toggleView(): void {
 
 export function toggleLayer(id: LayerId): boolean {
   state.layers[id] = !state.layers[id];
+  window.localStorage.setItem(LS_KEYS.layers, JSON.stringify(state.layers));
   notify();
   return state.layers[id];
 }
@@ -268,9 +314,9 @@ export function saveFocusRing(ring: FocusPoint[]): void {
 }
 
 export function resetAllSettings(): void {
-  window.localStorage.removeItem(LS_KEYS.home);
-  window.localStorage.removeItem(LS_KEYS.metar);
-  window.localStorage.removeItem(LS_KEYS.focus);
+  for (const key of Object.values(LS_KEYS)) {
+    window.localStorage.removeItem(key);
+  }
   // Reload is simplest — settings touch many derived fields.
   window.location.reload();
 }
