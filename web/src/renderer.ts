@@ -223,6 +223,37 @@ export function renderFrame(ctx: CanvasRenderingContext2D, data: MapData): void 
       ctx.closePath();
     }
     ctx.fill();
+    // OSM tidal water polygons — Hudson River, Chesapeake, SF Bay
+    // tributaries, Long Island Sound. Painted as WATER cutouts over
+    // the land tint. Raw polygon rings; browser Canvas fills them
+    // natively (no ear-clip needed). Per-polygon bbox reject keeps
+    // this cheap at radar zoom — usually only 5–20 polygons visible.
+    ctx.fillStyle = COLORS.background;
+    ctx.beginPath();
+    for (const ring of data.waterConus) {
+      // Cheap ring bbox in screen space using first + rough spread.
+      let minLat = ring[0][1], maxLat = ring[0][1];
+      let minLon = ring[0][0], maxLon = ring[0][0];
+      for (const [lon, lat] of ring) {
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+        if (lon < minLon) minLon = lon;
+        if (lon > maxLon) maxLon = lon;
+      }
+      const [x1, y1] = project(view, minLat, minLon);
+      const [x2, y2] = project(view, maxLat, maxLon);
+      const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+      const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+      if (maxX < 0 || minX >= SIZE || maxY < 0 || minY >= SIZE) continue;
+      let first = true;
+      for (const [lon, lat] of ring) {
+        const [x, y] = project(view, lat, lon);
+        if (first) { ctx.moveTo(x, y); first = false; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+    }
+    ctx.fill("evenodd");
   }
   drawCoastline(ctx, view, map.coastline);
   // Rivers rendered in the coastline color so they read as water. NE

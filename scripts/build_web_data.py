@@ -89,6 +89,16 @@ TIGER_ROADS_ZIP = CACHE_DIR / "tl_2024_us_primaryroads.zip"
 TIGER_ROADS_DIR = CACHE_DIR / "tl_2024_us_primaryroads"
 TIGER_ROADS_SHP = TIGER_ROADS_DIR / "tl_2024_us_primaryroads"
 
+# OSM ocean water polygons (tidal — includes Hudson River, Chesapeake
+# Bay tidal branches, Delaware River lower, San Francisco Bay etc.).
+# Ships as raw polygon outlines; the browser Canvas fill() handles
+# rendering. We skip Python ear-clipping because it's O(n²) and chokes
+# on 10k+ point ocean polygons.
+OSM_WATER_URL = "https://osmdata.openstreetmap.de/download/water-polygons-split-4326.zip"
+OSM_WATER_ZIP = CACHE_DIR / "water-polygons-split-4326.zip"
+OSM_WATER_DIR = CACHE_DIR / "water-polygons-split-4326"
+OSM_WATER_SHP = OSM_WATER_DIR / "water_polygons"
+
 CACHE_MAP = {
     "coastline": (COASTLINE_URL, CACHE_DIR / "ne_10m_coastline.geojson"),
     "land": (LAND_URL, CACHE_DIR / "ne_10m_land.geojson"),
@@ -271,6 +281,51 @@ def build_coastline_osm(bbox, tol_deg):
         simplified = dp_simplify(pts, tol_deg)
         if len(simplified) >= 2:
             out.append([round_pt(p) for p in simplified])
+    r.close()
+    return out
+
+
+def _ensure_osm_water() -> Path | None:
+    """Download + unzip OSM ocean water polygons (~900 MB one-time).
+    Returns the pyshp base path or None if pyshp isn't installed."""
+    try:
+        import shapefile  # noqa
+    except ImportError:
+        return None
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    if not OSM_WATER_SHP.with_suffix(".shp").exists():
+        if not OSM_WATER_ZIP.exists():
+            print(f"downloading {OSM_WATER_URL} (~900 MB, one-time)", file=sys.stderr)
+            urllib.request.urlretrieve(OSM_WATER_URL, OSM_WATER_ZIP)
+        print("unzipping OSM water polygons bundle", file=sys.stderr)
+        import zipfile
+        with zipfile.ZipFile(OSM_WATER_ZIP) as z:
+            z.extractall(CACHE_DIR)
+    return OSM_WATER_SHP
+
+
+def build_water_osm(bbox, tol_deg):
+    """OSM ocean/tidal water as raw polygon outlines — Hudson River,
+    Chesapeake Bay tributaries, SF Bay etc. Emitted as list-of-rings
+    (no triangulation) so the client Canvas fill() draws them natively;
+    Python ear-clip on 10 k+ point polygons was blowing past a 10-min
+    timeout. Skipped if pyshp isn't installed (returns empty)."""
+    base = _ensure_osm_water()
+    if base is None:
+        return []
+    import shapefile  # noqa
+    r = shapefile.Reader(str(base))
+    out = []
+    for i in range(len(r)):
+        sh = r.shape(i)
+        lonmin, latmin, lonmax, latmax = sh.bbox
+        if latmax < bbox[0] or latmin > bbox[1]: continue
+        if lonmax < bbox[2] or lonmin > bbox[3]: continue
+        pts = list(sh.points)
+        if len(pts) < 3: continue
+        s = dp_simplify(pts, tol_deg)
+        if len(s) < 3: continue
+        out.append([round_pt(p) for p in s])
     r.close()
     return out
 
@@ -697,10 +752,23 @@ def build_conus() -> None:
     lakes = build_land(conus_bbox, tol_deg=0.001, layer_keys=("lakes",))
     emit(OUT_DIR / "lakes_conus.json", lakes)
     # Rivers as centerlines. Fills the gap for major rivers like the
-    # Hudson that OSM tags as `waterway=river` (not coastline) — those
-    # otherwise render as landmass on the coastline dataset.
+    # Hudson (upper section) that OSM tags as `waterway=river` (not
+    # coastline) — those otherwise render as landmass on the coastline
+    # dataset.
     rivers = build_rivers(conus_bbox, tol_deg=0.001)
     emit(OUT_DIR / "rivers_conus.json", rivers)
+    # OSM ocean/tidal water polygons. Cuts out Hudson River (lower,
+    # tidal), Chesapeake Bay branches, SF Bay tributaries, Long Island
+    # Sound, etc. — none of which appear in the coastline linestring
+    # dataset or in the river centerlines. Raw polygon outlines
+    # (no triangulation); the browser fills them natively.
+    water = build_water_osm(conus_bbox, tol_deg=0.0005)
+    if water:
+        # Not a LandData shape — write as raw polygons.
+        import json as _json
+        (OUT_DIR / "water_conus.json").write_text(_json.dumps(water, separators=(",", ":")))
+        print(f"wrote water_conus.json ({sum(len(p) for p in water)} pts, {len(water)} polys)",
+              file=sys.stderr)
     # Roads: TIGER/Line primary roads (Interstates + US + State
     # Routes), from the US Census Bureau. Public domain, US-only,
     # 17 k line segments, single ~38 MB shapefile download. ~10 m

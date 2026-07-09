@@ -46,6 +46,12 @@ export interface MapData {
   coastlineConus: LonLat[][];
   landConus: LandData;
   lakesConus: LandData;
+  // OSM ocean/tidal water polygons: each entry is a closed ring of
+  // (lon, lat) points. Rendered as WATER-color cutouts over the land
+  // tint so the Hudson, Chesapeake, Long Island Sound, SF Bay
+  // tributaries etc. read as water even though the coastline
+  // linestring dataset doesn't mark them.
+  waterConus: LonLat[][];
   roadsConus: RoadLine[];
   riversConus: LonLat[][];
   airports: Record<string, Airport>;
@@ -102,7 +108,7 @@ async function fetchJSON<T>(url: string): Promise<T> {
 export async function loadMapData(basePath = "data"): Promise<MapData> {
   const [
     coastline, land, roads, rivers,
-    coastlineConus, landConus, lakesConus, roadsConus, riversConus,
+    coastlineConus, landConus, lakesConus, waterConus, roadsConus, riversConus,
     airports, airportIndex,
   ] = await Promise.all([
     fetchJSON<LonLat[][]>(`${basePath}/coastline.json`),
@@ -112,6 +118,7 @@ export async function loadMapData(basePath = "data"): Promise<MapData> {
     fetchJSON<LonLat[][]>(`${basePath}/coastline_conus.json`),
     fetchJSON<LandData>(`${basePath}/land_conus.json`),
     fetchJSON<LandData>(`${basePath}/lakes_conus.json`),
+    fetchJSON<LonLat[][]>(`${basePath}/water_conus.json`),
     fetchJSON<RoadLine[]>(`${basePath}/roads_conus.json`),
     fetchJSON<LonLat[][]>(`${basePath}/rivers_conus.json`),
     fetchJSON<Record<string, Airport>>(`${basePath}/airports.json`),
@@ -119,7 +126,7 @@ export async function loadMapData(basePath = "data"): Promise<MapData> {
   ]);
   return {
     coastline, land, roads, rivers,
-    coastlineConus, landConus, lakesConus, roadsConus, riversConus,
+    coastlineConus, landConus, lakesConus, waterConus, roadsConus, riversConus,
     airports, airportIndex,
   };
 }
