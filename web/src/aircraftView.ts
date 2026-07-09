@@ -13,6 +13,7 @@ import {
   COLORS,
   GRID_OUTER_RADIUS,
 } from "./theme";
+import { state } from "./state";
 
 interface TagRect {
   x: number; y: number;
@@ -38,6 +39,30 @@ function iconColor(a: Aircraft): string {
     return COLORS.emergency;
   }
   return COLORS.aircraft;
+}
+
+// True when the record represents something on/near the airport surface
+// (parked aircraft, taxiing, ground vehicles). These blow up the icon
+// count at KSFO/KOAK etc. — the desk toy cares about flying traffic.
+function isOnGround(a: Aircraft): boolean {
+  if (a.altFt === null) return true;   // adsb.fi "ground" sentinel
+  if (a.altFt < 100 && a.gsKnots < 40) return true;
+  return false;
+}
+
+// Clarity ranking — mirrors the firmware's clarityScore. Higher = more
+// interesting to see with a tag. Jets high & fast → high; low pattern
+// GA → low.
+function clarityScore(a: Aircraft): number {
+  if (a.squawk === 7500 || a.squawk === 7600 || a.squawk === 7700) return 1e9;
+  const alt = a.altFt ?? 0;
+  return alt + a.gsKnots * 20 + Math.abs(a.vsFpm) / 5;
+}
+
+// Tag budget per range preset — matches the firmware ring at 5/10/15/25.
+const TAG_BUDGETS = [20, 15, 10, 6];
+function currentTagBudget(): number {
+  return TAG_BUDGETS[state.rangeIdx] ?? 8;
 }
 
 function drawIcon(
@@ -149,9 +174,11 @@ function formatAlt(altFt: number | null): string {
   return String(hundreds).padStart(3, "0");
 }
 
-/** Draw all aircraft that project inside the outer disc. Sorted by
- *  distance from center (closest last = on top) so the aircraft you're
- *  watching aren't hidden by peripheral traffic. */
+/** Draw all in-flight aircraft that project inside the outer disc.
+ *  Aircraft on the airport surface (parked, taxiing, ground vehicles)
+ *  are filtered out — this is a spectator radar for flying traffic.
+ *  Tags are capped by a per-range budget and awarded to the top-clarity
+ *  aircraft only (jets over pattern GA at wide zooms). */
 export function drawAircraft(
   ctx: CanvasRenderingContext2D,
   view: ViewFrame,
@@ -162,18 +189,30 @@ export function drawAircraft(
     icon: [number, number];
     a: Aircraft;
     d2: number;
+    clarity: number;
+    tagged: boolean;
   }
   const placed: Placed[] = [];
   for (const a of aircraft) {
+    if (isOnGround(a)) continue;
     const [x, y] = project(view, a.lat, a.lon);
     const d2 = distSqFromCenter(x, y);
     if (d2 > GRID_OUTER_RADIUS * GRID_OUTER_RADIUS) continue;
-    placed.push({ icon: [x, y], a, d2 });
+    placed.push({ icon: [x, y], a, d2, clarity: clarityScore(a), tagged: false });
   }
+
+  // Award tags to top-clarity aircraft up to the budget. Everyone else
+  // still gets an icon + track vector, just no label.
+  const budget = currentTagBudget();
+  const ranked = [...placed].sort((p, q) => q.clarity - p.clarity);
+  for (let i = 0; i < Math.min(budget, ranked.length); i++) {
+    ranked[i].tagged = true;
+  }
+
   // Farthest first so nearby ones draw over them.
   placed.sort((p, q) => q.d2 - p.d2);
 
-  // Track/heading + icon pass.
+  // Track vector + icon pass.
   for (const { icon: [x, y], a } of placed) {
     drawTrackVector(ctx, x, y, a.trackDeg, a.gsKnots, view);
     drawIcon(ctx, x, y, a.noseDeg || a.trackDeg, iconColor(a));
@@ -187,7 +226,8 @@ export function drawAircraft(
     x: x - ICON_HALF, y: y - ICON_HALF,
     w: ICON_HALF * 2, h: ICON_HALF * 2,
   }));
-  for (const { icon: [x, y], a } of placed) {
+  for (const { icon: [x, y], a, tagged } of placed) {
+    if (!tagged) continue;
     const rect = pickTagRect(x, y, taken);
     taken.push(rect);
     const emergency = a.squawk === 7500 || a.squawk === 7600 || a.squawk === 7700;
