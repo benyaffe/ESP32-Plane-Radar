@@ -17,7 +17,7 @@ constexpr unsigned long kOverlayMs = 1500;
 // default ranges chosen for each field's typical traffic pattern (Class B/C
 // = 10 nm, GA = 5 nm).
 const FocusPoint kFocusPoints[] = {
-    {"Home", 0.0,       0.0,        1 /*10 nm*/, true},   // Bryant St, SF
+    {"Sutro", 0.0,      0.0,        1 /*10 nm*/, true},   // Sutro Tower, SF (default center)
     {"SFO",  37.6188,  -122.3750,   1 /*10 nm*/, false},  // Class B
     {"OAK",  37.7213,  -122.2214,   1 /*10 nm*/, false},  // Class C
     {"SJC",  37.3639,  -121.9289,   1 /*10 nm*/, false},  // San Jose, Class C

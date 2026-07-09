@@ -2,7 +2,7 @@
 """Build baked coastline vector data from Natural Earth 1:10m.
 
 Downloads Natural Earth's public-domain 10m coastline GeoJSON, clips to a
-bounding box around a chosen center (default: 2125 Bryant St SF), simplifies
+bounding box around a chosen center (default: Sutro Tower SF), simplifies
 with Douglas-Peucker to a tolerance readable at the radar's 240×240 canvas,
 and emits src/data/coastlines_data.cpp for the firmware/native build.
 
@@ -33,9 +33,9 @@ NATURAL_EARTH_URL = (
     "geojson/ne_10m_coastline.geojson"
 )
 
-# Defaults: user home (Mission District SF).
-DEFAULT_CENTER_LAT = 37.759
-DEFAULT_CENTER_LON = -122.409
+# Default: Sutro Tower, San Francisco — well-known TV/radio broadcast tower,
+DEFAULT_CENTER_LAT = 37.7552
+DEFAULT_CENTER_LON = -122.4528
 DEFAULT_RADIUS_KM = 200.0
 DEFAULT_SIMPLIFY_TOL_DEG = 0.002  # ≈ 220 m ≈ 1.5 px at 25 nm range
 

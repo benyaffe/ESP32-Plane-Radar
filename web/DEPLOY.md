@@ -18,13 +18,13 @@ proxies aircraft data. Everything below is free forever at this scale.
 4. Pick **`benyaffe/ESP32-Plane-Radar`**. Click **Begin setup**.
 5. Fill in the build config (this is the only Cloudflare screen where the defaults are wrong for us — because our site lives in a `web/` subdirectory, not the repo root):
 
-    | Field                  | Value                              |
-    | ---------------------- | ---------------------------------- |
-    | Project name           | `plane-radar` (or anything you like) |
-    | Production branch      | `sdl-emulator` (or `main` after you merge) |
-    | Framework preset       | **None**                           |
-    | Build command          | `cd web && npm install && npm run build` |
-    | Build output directory | `web/dist`                         |
+    | Field                  | Value                                                |
+    | ---------------------- | ---------------------------------------------------- |
+    | Project name           | `plane-radar` (or anything you like)                 |
+    | Production branch      | `sdl-emulator` (or `main` after you merge)           |
+    | Framework preset       | **None**                                             |
+    | Build command          | `cd web && npm install && npm run build`             |
+    | Build output directory | `web/dist`                                           |
     | Root directory         | *(leave blank — the build command already `cd`s in)* |
 
 6. Click **Save and Deploy**. First build takes ~2 minutes.
@@ -56,7 +56,7 @@ anything breaks.
 
 ## What if I want to test locally first?
 
-```
+```bash
 cd web
 npm install
 npm run dev

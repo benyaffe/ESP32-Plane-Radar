@@ -6,6 +6,26 @@
 
 Firmware for an **ESP32-C3 Super Mini** and a **1.28″ round GC9A01** display (240×240). Shows a circular **ADS-B radar** around your configured location, with **WiFiManager** for first-time setup.
 
+---
+
+> ## This is a fork
+>
+> Personal fork of [`MatixYo/ESP32-Plane-Radar`](https://github.com/MatixYo/ESP32-Plane-Radar). See [**FORK.md**](FORK.md) for the full changelog; the additions in one glance:
+>
+> - **SDL desktop emulator** — the full radar renders in a Mac window (`pio run -e native`), no ESP32 needed to iterate.
+> - **Web preview** — TypeScript port under [`web/`](web/), deployable to Cloudflare Pages for free; try the interface in a browser without hardware.
+> - **Live weather view** — triple-tap for a VFR/MVFR/IFR/LIFR dot map of Bay Area airports (METAR from api.weather.gov).
+> - **Focus cycling** — double-tap moves the radar center through a Bay Area preset ring (Sutro → SFO → OAK → SJC → HWD → SQL → PAO → HAF), each with its own default zoom.
+> - **Map overlays** — coastline, land tint, major highways, and large-airport runways baked into flash from Natural Earth + OurAirports.
+> - **Aircraft data blocks** — 2-line tags with callsign + altitude in hundreds of feet, rank-limited by a per-range clarity budget so wide views stay readable.
+> - **Nautical miles** as the display unit (aviation convention).
+> - **FAA Class B/C/D airspace** — real polygon data baked from the FAA's public GeoJSON. Rendered as dashed class-colored rings; currently off by default in the traffic view, on in the code for future modes.
+> - **Layer toggles** — every overlay individually flips on/off via `1`–`7` keys in the emulator or buttons on the web.
+>
+> Upstream README continues below, unmodified.
+>
+> ---
+
 ## What it does
 
 1. **Wi‑Fi setup** (if needed) — captive portal on AP **`PlaneRadar-Setup`**

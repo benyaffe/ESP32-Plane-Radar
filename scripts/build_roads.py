@@ -31,8 +31,8 @@ ROADS_URL = (
     "geojson/ne_10m_roads.geojson"
 )
 
-DEFAULT_CENTER_LAT = 37.759
-DEFAULT_CENTER_LON = -122.409
+DEFAULT_CENTER_LAT = 37.7552
+DEFAULT_CENTER_LON = -122.4528
 DEFAULT_RADIUS_KM = 200.0
 DEFAULT_SIMPLIFY_TOL_DEG = 0.003  # ~330 m; roads can be a bit coarser than coast
 

@@ -34,8 +34,8 @@ ISLANDS_URL = (
     "geojson/ne_10m_minor_islands.geojson"
 )
 
-DEFAULT_CENTER_LAT = 37.759
-DEFAULT_CENTER_LON = -122.409
+DEFAULT_CENTER_LAT = 37.7552
+DEFAULT_CENTER_LON = -122.4528
 DEFAULT_RADIUS_KM = 200.0
 # Slightly coarser than coastlines: triangles don't need as much detail as
 # the outline stroke, and each vertex costs 8 B in the baked table.

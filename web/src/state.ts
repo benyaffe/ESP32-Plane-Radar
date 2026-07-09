@@ -16,15 +16,19 @@ export interface FocusPoint {
 }
 
 // Bay Area focus ring — same shape as services::focus in the firmware.
+// First entry is the default center: Sutro Tower (well-known SF broadcast
+// landmark), NOT a private residence. isHome flags the "starting" point
+// so the firmware knows to fall through to its persisted user location
+// when actually running on hardware.
 export const FOCUS_RING: FocusPoint[] = [
-  { label: "Home", lat: 37.759,  lon: -122.409,  defaultRangeIdx: 1, isHome: true  },
-  { label: "SFO",  lat: 37.6188, lon: -122.3750, defaultRangeIdx: 1, isHome: false },
-  { label: "OAK",  lat: 37.7213, lon: -122.2214, defaultRangeIdx: 1, isHome: false },
-  { label: "SJC",  lat: 37.3639, lon: -121.9289, defaultRangeIdx: 1, isHome: false },
-  { label: "HWD",  lat: 37.6591, lon: -122.1214, defaultRangeIdx: 0, isHome: false },
-  { label: "SQL",  lat: 37.5119, lon: -122.2495, defaultRangeIdx: 0, isHome: false },
-  { label: "PAO",  lat: 37.4611, lon: -122.1150, defaultRangeIdx: 0, isHome: false },
-  { label: "HAF",  lat: 37.5136, lon: -122.5006, defaultRangeIdx: 0, isHome: false },
+  { label: "Sutro", lat: 37.7552, lon: -122.4528, defaultRangeIdx: 1, isHome: true  },
+  { label: "SFO",   lat: 37.6188, lon: -122.3750, defaultRangeIdx: 1, isHome: false },
+  { label: "OAK",   lat: 37.7213, lon: -122.2214, defaultRangeIdx: 1, isHome: false },
+  { label: "SJC",   lat: 37.3639, lon: -121.9289, defaultRangeIdx: 1, isHome: false },
+  { label: "HWD",   lat: 37.6591, lon: -122.1214, defaultRangeIdx: 0, isHome: false },
+  { label: "SQL",   lat: 37.5119, lon: -122.2495, defaultRangeIdx: 0, isHome: false },
+  { label: "PAO",   lat: 37.4611, lon: -122.1150, defaultRangeIdx: 0, isHome: false },
+  { label: "HAF",   lat: 37.5136, lon: -122.5006, defaultRangeIdx: 0, isHome: false },
 ];
 
 export interface AppState {

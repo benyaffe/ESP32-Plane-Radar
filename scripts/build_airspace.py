@@ -36,8 +36,8 @@ FAA_URL = (
     "?format=geojson&spatialRefId=4326&where=1=1"
 )
 
-DEFAULT_CENTER_LAT = 37.759
-DEFAULT_CENTER_LON = -122.409
+DEFAULT_CENTER_LAT = 37.7552
+DEFAULT_CENTER_LON = -122.4528
 DEFAULT_RADIUS_KM = 150.0
 DEFAULT_SIMPLIFY_TOL_DEG = 0.001  # ≈ 110 m — polygon edges are shorter than
                                   # coastline so we simplify less aggressively.

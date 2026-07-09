@@ -216,14 +216,17 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
 
 namespace services::location {
 
-// Default center for the SDL emulator: user's home in the Mission (SF 94110).
-// The real firmware persists this via Preferences and lets the WiFiManager
-// portal edit it; here it is compiled in.
-static constexpr double kNativeHomeLat = 37.7590;
-static constexpr double kNativeHomeLon = -122.4093;
+// Default center for the SDL emulator: Sutro Tower, San Francisco — a
+// well-known TV/radio broadcast tower atop Mount Sutro. Chosen because
+// it's a recognizable public landmark central to the Bay Area radar
+// scene (as opposed to any private residence). The real firmware
+// persists this via Preferences and lets the WiFiManager portal edit
+// it; here it is compiled in.
+static constexpr double kNativeCenterLat = 37.7552;
+static constexpr double kNativeCenterLon = -122.4528;
 
-static double s_lat = kNativeHomeLat;
-static double s_lon = kNativeHomeLon;
+static double s_lat = kNativeCenterLat;
+static double s_lon = kNativeCenterLon;
 static bool s_override_active = false;
 static double s_override_lat = 0.0;
 static double s_override_lon = 0.0;
@@ -232,7 +235,7 @@ void init() {}
 double lat() { return s_override_active ? s_override_lat : s_lat; }
 double lon() { return s_override_active ? s_override_lon : s_lon; }
 bool saveFromStrings(const char*, const char*) { return false; }
-void clear() { s_lat = kNativeHomeLat; s_lon = kNativeHomeLon; }
+void clear() { s_lat = kNativeCenterLat; s_lon = kNativeCenterLon; }
 void setOverride(double lat, double lon) {
   s_override_lat = lat;
   s_override_lon = lon;

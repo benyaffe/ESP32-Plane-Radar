@@ -42,8 +42,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE_DIR = ROOT / ".local-data"
 OUT_DIR = ROOT / "web" / "public" / "data"
 
-DEFAULT_CENTER_LAT = 37.759
-DEFAULT_CENTER_LON = -122.409
+DEFAULT_CENTER_LAT = 37.7552
+DEFAULT_CENTER_LON = -122.4528
 DEFAULT_RADIUS_KM = 200.0
 KM_PER_DEG = 111.0
 
