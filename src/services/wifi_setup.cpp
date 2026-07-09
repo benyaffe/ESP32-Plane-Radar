@@ -60,6 +60,27 @@ namespace {
 constexpr char kWifiPrefsNamespace[] = "wifi";
 constexpr char kPrefsForcePortalKey[] = "portal";
 
+constexpr char kClockPrefsNamespace[] = "clock";
+constexpr char kClockPrefsTzKey[] = "tz";
+// SF Bay Area — matches the Sutro Tower default home coord. Users in other
+// regions edit this via the portal.
+constexpr char kDefaultTz[] = "PST8PDT,M3.2.0,M11.1.0/2";
+
+String loadStoredTz() {
+  Preferences prefs;
+  if (!prefs.begin(kClockPrefsNamespace, true)) return String(kDefaultTz);
+  String tz = prefs.getString(kClockPrefsTzKey, kDefaultTz);
+  prefs.end();
+  if (tz.length() == 0) tz = kDefaultTz;
+  return tz;
+}
+
+void applyTzAndStartSntp() {
+  const String tz = loadStoredTz();
+  configTzTime(tz.c_str(), "pool.ntp.org", "time.nist.gov");
+  Serial.printf("clock: TZ=%s, SNTP started\n", tz.c_str());
+}
+
 bool s_force_config_portal = false;
 WiFiManager s_wm;
 bool s_wm_configured = false;
@@ -72,6 +93,7 @@ bool wifiLinkUp();
 constexpr int kCoordParamLen = 20;
 constexpr int kRadiusParamLen = 8;
 constexpr int kFocusJsonParamLen = 640;
+constexpr int kTzParamLen = 40;
 constexpr char kCoordInputAttrs[] =
     " type=\"number\" step=\"0.000001\"";
 constexpr char kRadiusInputAttrs[] =
@@ -98,6 +120,9 @@ WiFiManagerParameter s_param_focus_json(
     "focus_ring",
     "Focus airports (JSON: [{name,lat,lon,range_idx}, ...])", "",
     kFocusJsonParamLen, kFocusJsonAttrs);
+
+WiFiManagerParameter s_param_tz("clock_tz", "Time zone (POSIX TZ)",
+                                kDefaultTz, kTzParamLen);
 
 char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
@@ -127,6 +152,9 @@ void refreshPortalParamDefaults() {
   const String ring_json = services::focus::currentRingJson();
   s_param_focus_json.setValue(ring_json.c_str(), kFocusJsonParamLen);
 
+  const String tz = loadStoredTz();
+  s_param_tz.setValue(tz.c_str(), kTzParamLen);
+
   snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs),
            "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
   s_param_runways.setValue("T", 2);
@@ -141,6 +169,16 @@ void onPortalParamsSaved() {
                                           s_param_metar_lon.getValue(),
                                           s_param_metar_radius.getValue());
   services::focus::saveRingJson(s_param_focus_json.getValue());
+  const char* tz = s_param_tz.getValue();
+  if (tz != nullptr && tz[0] != '\0') {
+    Preferences prefs;
+    if (prefs.begin(kClockPrefsNamespace, false)) {
+      prefs.putString(kClockPrefsTzKey, tz);
+      prefs.end();
+      Serial.printf("clock: TZ saved (%s) — SNTP re-applied\n", tz);
+      configTzTime(tz, "pool.ntp.org", "time.nist.gov");
+    }
+  }
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 }
 
@@ -152,6 +190,7 @@ void attachPortalParams(WiFiManager& wm) {
   wm.addParameter(&s_param_metar_lon);
   wm.addParameter(&s_param_metar_radius);
   wm.addParameter(&s_param_focus_json);
+  wm.addParameter(&s_param_tz);
   wm.addParameter(&s_param_runways);
   wm.setSaveParamsCallback(onPortalParamsSaved);
 }
@@ -488,6 +527,11 @@ bool wifiReconnect() {
 void wifiLoop() {
   ensureWifiManager();
   if (wifiLinkUp()) {
+    static bool sntp_started = false;
+    if (!sntp_started) {
+      applyTzAndStartSntp();
+      sntp_started = true;
+    }
     if (!s_wm.getWebPortalActive() && !s_wm.getConfigPortalActive()) {
       startLanWebPortal();
     }

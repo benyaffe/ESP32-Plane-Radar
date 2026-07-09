@@ -21,8 +21,11 @@
 #include "hardware/display.h"
 #include "services/adsb_client.h"
 #include "services/focus_points.h"
+#include "services/metar_config.h"
+#include "services/outdoor_temp.h"
 #include "services/radar_location.h"
 #include "services/wifi_setup.h"
+#include "ui/cockpit_screen.h"
 #include "ui/layer_style.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
@@ -31,8 +34,9 @@
 namespace {
 
 constexpr uint8_t kShotFakeGpio = 10;
-bool g_weather_mode = false;
-unsigned long g_last_weather_draw_ms = 0;
+enum class Screen : uint8_t { Radar, MetarWeather, Cockpit };
+Screen g_screen = Screen::Radar;
+unsigned long g_last_non_radar_draw_ms = 0;
 constexpr const char* kShotPath = "/tmp/plane-radar-screenshot.ppm";
 constexpr unsigned long kAutoShotIntervalMs = 200;
 
@@ -77,16 +81,24 @@ void onFocusTap() {
   ui::radarDisplayDraw();
 }
 
-void enterWeatherMode() {
-  g_weather_mode = true;
-  std::printf("View: weather\n");
+void enterMetarWeather() {
+  g_screen = Screen::MetarWeather;
+  std::printf("View: METAR weather\n");
   ui::weather::refresh();
   ui::weather::draw();
-  g_last_weather_draw_ms = millis();
+  g_last_non_radar_draw_ms = millis();
 }
 
-void exitWeatherMode() {
-  g_weather_mode = false;
+void enterCockpit() {
+  g_screen = Screen::Cockpit;
+  std::printf("View: cockpit\n");
+  ui::cockpit::refresh();
+  ui::cockpit::draw();
+  g_last_non_radar_draw_ms = millis();
+}
+
+void returnToRadar() {
+  g_screen = Screen::Radar;
   std::printf("View: radar\n");
   ui::radarDisplayDraw();
 }
@@ -131,7 +143,9 @@ bool consumeLayerKey(const KeyBinding& kb) {
 void setup() {
   std::printf(
       "Plane Radar — SDL emulator\n"
-      "  SPACE  : tap  (single = range, double = focus, triple = weather)\n"
+      "  SPACE  : tap  (single=range, double=focus, triple=advance screen)\n"
+      "           Radar → METAR weather → Cockpit → Radar\n"
+      "           (any tap on a non-radar screen returns to radar)\n"
       "  S      : save screenshot\n"
       "  1..7   : toggle layer (coastline / land / roads / airspace /\n"
       "           runways-large / runways-focus / aircraft-tags)\n");
@@ -144,18 +158,23 @@ void setup() {
   }
   displayInit();
   services::location::init();
+  services::metar_config::init();
   ui::radar::rangeInit();
   services::focus::init();
   ui::layers::init();
+  ui::cockpit::init();
   ui::radarDisplayDraw();
   // Kick off an initial fetch so the first frame isn't empty.
   services::adsb::fetchUpdate(services::location::lat(),
                               services::location::lon(),
                               ui::radar::fetchRadiusKm());
-  // Dev shortcut: PLANE_RADAR_WEATHER=1 enters weather view on boot so
-  // snap.sh can capture it without keyboard input during testing.
+  // Dev shortcut: PLANE_RADAR_WEATHER=1 opens the METAR weather view on
+  // boot; PLANE_RADAR_COCKPIT=1 opens the cockpit clock. snap.sh uses
+  // these to capture non-radar screens without keyboard input.
   const char* wxvar = std::getenv("PLANE_RADAR_WEATHER");
-  if (wxvar && wxvar[0] == '1') enterWeatherMode();
+  if (wxvar && wxvar[0] == '1') enterMetarWeather();
+  const char* cpvar = std::getenv("PLANE_RADAR_COCKPIT");
+  if (cpvar && cpvar[0] == '1') enterCockpit();
 }
 
 void loop() {
@@ -163,18 +182,23 @@ void loop() {
   static unsigned long last_adsb_ms = 0;
   bootButtonPollLongPress();
   const BootTap ev = bootButtonConsumeEvent();
-  if (g_weather_mode) {
-    if (ev == BootTap::Triple) {
-      enterWeatherMode();  // re-refresh
-    } else if (ev != BootTap::None) {
-      exitWeatherMode();
-    }
-  } else {
-    switch (ev) {
-      case BootTap::Single: onRangeTap(); break;
-      case BootTap::Double: onFocusTap(); break;
-      case BootTap::Triple: enterWeatherMode(); break;
-      case BootTap::None: break;
+  if (ev != BootTap::None) {
+    switch (g_screen) {
+      case Screen::Radar:
+        switch (ev) {
+          case BootTap::Single: onRangeTap(); break;
+          case BootTap::Double: onFocusTap(); break;
+          case BootTap::Triple: enterMetarWeather(); break;
+          case BootTap::None: break;
+        }
+        break;
+      case Screen::MetarWeather:
+        if (ev == BootTap::Triple) enterCockpit();
+        else                       returnToRadar();
+        break;
+      case Screen::Cockpit:
+        returnToRadar();
+        break;
     }
   }
   if (consumeShotKey()) {
@@ -184,16 +208,23 @@ void loop() {
   for (const auto& kb : kLayerKeys) {
     if (consumeLayerKey(kb)) {
       ui::layers::toggle(kb.layer);
-      if (!g_weather_mode) ui::radarDisplayDraw();
+      if (g_screen == Screen::Radar) ui::radarDisplayDraw();
     }
   }
 
   const unsigned long now = millis();
-  if (g_weather_mode) {
-    if (now - g_last_weather_draw_ms >= 1000) {
-      g_last_weather_draw_ms = now;
+  services::outdoor_temp::loop();
+  if (g_screen == Screen::MetarWeather) {
+    if (now - g_last_non_radar_draw_ms >= 1000) {
+      g_last_non_radar_draw_ms = now;
       ui::weather::refresh();
       ui::weather::draw();
+    }
+  } else if (g_screen == Screen::Cockpit) {
+    if (now - g_last_non_radar_draw_ms >= 1000) {
+      g_last_non_radar_draw_ms = now;
+      ui::cockpit::refresh();
+      ui::cockpit::draw();
     }
   } else {
     // adsb.fi's public rate limit is 1 req/s; matching the firmware's 3 s poll.

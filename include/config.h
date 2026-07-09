@@ -29,6 +29,13 @@ constexpr unsigned long kBootResetHoldMs = 3000UL;
 /** Ignore BOOT taps shorter than this (debounce). */
 constexpr unsigned long kBootTapMinMs = 40UL;
 
+// --- Optional BME280 environmental sensor (I²C, address 0x76 or 0x77) ---
+// Pins picked to avoid the SPI display on 0/1/3/4/10. Leave unconnected
+// if no sensor is present — env_sensor.cpp probes on boot and silently
+// disables itself when nothing answers.
+constexpr int kBmeSdaPin = 6;
+constexpr int kBmeSclPin = 7;
+
 // --- Display: GC9A01 1.28" round 240×240 (SPI) ---
 constexpr gpio_num_t kDisplayPinRst = GPIO_NUM_0;
 constexpr gpio_num_t kDisplayPinCs = GPIO_NUM_1;
