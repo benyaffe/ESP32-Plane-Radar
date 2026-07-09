@@ -79,6 +79,15 @@ OSM_COASTLINE_ZIP = CACHE_DIR / "coastlines-split-4326.zip"
 OSM_COASTLINE_DIR = CACHE_DIR / "coastlines-split-4326"
 OSM_COASTLINE_SHP = OSM_COASTLINE_DIR / "lines"  # base path (pyshp adds .shp)
 
+# TIGER/Line — US Census Bureau's primary roads shapefile. Public
+# domain. Covers Interstates + US Highways + State Routes across the
+# whole US in one ~38 MB shapefile. RTTYP field distinguishes: I =
+# Interstate, U = US Highway, S = State Route, M/O/C = other.
+TIGER_ROADS_URL = "https://www2.census.gov/geo/tiger/TIGER2024/PRIMARYROADS/tl_2024_us_primaryroads.zip"
+TIGER_ROADS_ZIP = CACHE_DIR / "tl_2024_us_primaryroads.zip"
+TIGER_ROADS_DIR = CACHE_DIR / "tl_2024_us_primaryroads"
+TIGER_ROADS_SHP = TIGER_ROADS_DIR / "tl_2024_us_primaryroads"
+
 CACHE_MAP = {
     "coastline": (COASTLINE_URL, CACHE_DIR / "ne_10m_coastline.geojson"),
     "land": (LAND_URL, CACHE_DIR / "ne_10m_land.geojson"),
@@ -234,6 +243,59 @@ def build_coastline_osm(bbox, tol_deg):
         simplified = dp_simplify(pts, tol_deg)
         if len(simplified) >= 2:
             out.append([round_pt(p) for p in simplified])
+    r.close()
+    return out
+
+
+def _ensure_tiger_roads() -> Path | None:
+    """Download + unzip TIGER primary roads shapefile (~38 MB). Returns
+    the pyshp base path or None if pyshp isn't installed."""
+    try:
+        import shapefile  # noqa
+    except ImportError:
+        return None
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    if not TIGER_ROADS_SHP.with_suffix(".shp").exists():
+        if not TIGER_ROADS_ZIP.exists():
+            print(f"downloading {TIGER_ROADS_URL} (~38 MB)", file=sys.stderr)
+            urllib.request.urlretrieve(TIGER_ROADS_URL, TIGER_ROADS_ZIP)
+        print("unzipping TIGER roads bundle", file=sys.stderr)
+        import zipfile
+        with zipfile.ZipFile(TIGER_ROADS_ZIP) as z:
+            z.extractall(TIGER_ROADS_DIR)
+    return TIGER_ROADS_SHP
+
+
+def build_roads_tiger(bbox, tol_deg):
+    """CONUS-wide primary roads (Interstates + US Highways + State
+    Routes) from US Census TIGER/Line. Emits the same schema as
+    build_roads(): [{type, points}, …]. Route type is picked from
+    RTTYP so the renderer can weight them differently later:
+      I = Interstate, U = US Highway, S = State Route, M/O/C = other."""
+    base = _ensure_tiger_roads()
+    if base is None:
+        return []
+    import shapefile  # noqa
+    r = shapefile.Reader(str(base))
+    # Human-readable type labels.
+    TYPE = {"I": "Interstate", "U": "US Highway", "S": "State Route",
+            "M": "Common Name", "O": "Other", "C": "County"}
+    out = []
+    for i in range(len(r)):
+        sh = r.shape(i)
+        lonmin, latmin, lonmax, latmax = sh.bbox
+        if latmax < bbox[0] or latmin > bbox[1]: continue
+        if lonmax < bbox[2] or lonmin > bbox[3]: continue
+        pts = list(sh.points)
+        simplified = dp_simplify(pts, tol_deg)
+        if len(simplified) < 2:
+            continue
+        rec = r.record(i)
+        rttyp = (rec["RTTYP"] or "").strip()
+        out.append({
+            "type": TYPE.get(rttyp, "Other"),
+            "points": [round_pt(p) for p in simplified],
+        })
     r.close()
     return out
 
@@ -599,13 +661,26 @@ def build_conus() -> None:
     emit(OUT_DIR / "land_conus.json", land)
     # Lakes as their own layer so they can render as WATER cutouts
     # (background color) over the land tint — otherwise Great Lakes
-    # cities read as landlocked.
-    lakes = build_land(conus_bbox, tol_deg=0.005, layer_keys=("lakes",))
+    # cities read as landlocked. Bumped to the finest tolerance
+    # Natural Earth 10 m supports (~111 m). NE plateaus around
+    # ~16 k vertices no matter how fine we DP — inherent source
+    # limit. OSM `natural=water` would be crisper but requires an
+    # Overpass build-time query; deferred until visually needed.
+    lakes = build_land(conus_bbox, tol_deg=0.001, layer_keys=("lakes",))
     emit(OUT_DIR / "lakes_conus.json", lakes)
-    # Major + Secondary highways; DP tol ≈ 300 m.
-    roads = build_roads(conus_bbox, tol_deg=0.003,
-                        keep_types=("Major Highway", "Secondary Highway"))
-    emit(OUT_DIR / "roads_conus.json", roads)
+    # Roads: TIGER/Line primary roads (Interstates + US + State
+    # Routes), from the US Census Bureau. Public domain, US-only,
+    # 17 k line segments, single ~38 MB shapefile download. ~10 m
+    # tolerance (near-native) = ~10 MB raw / 3 MB gzipped — fits
+    # under Cloudflare's 25 MiB per-file limit with margin.
+    roads = build_roads_tiger(conus_bbox, tol_deg=0.0001)
+    if roads:
+        emit(OUT_DIR / "roads_conus.json", roads)
+    else:
+        # pyshp missing — fall back to Natural Earth roads.
+        roads = build_roads(conus_bbox, tol_deg=0.003,
+                            keep_types=("Major Highway", "Secondary Highway"))
+        emit(OUT_DIR / "roads_conus.json", roads)
 
 
 def main() -> None:
