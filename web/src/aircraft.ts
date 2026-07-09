@@ -130,8 +130,16 @@ export async function fetchAircraft(
   const url =
     `api/adsb?lat=${centerLat.toFixed(4)}` +
     `&lon=${centerLon.toFixed(4)}&nm=${nm.toFixed(1)}`;
+  // Abort after 5 s so a stalled upstream doesn't freeze the poll loop.
+  // The polling caller uses an "in-flight" flag; if we don't abort,
+  // one slow request can block every subsequent 3 s tick.
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 5000);
   try {
-    const resp = await fetch(url, { cache: "no-store" });
+    const resp = await fetch(url, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
     if (!resp.ok) {
       s_lastError = `HTTP ${resp.status}`;
       return;
@@ -148,5 +156,7 @@ export async function fetchAircraft(
     s_fetchCount += 1;
   } catch (err) {
     s_lastError = err instanceof Error ? err.message : String(err);
+  } finally {
+    clearTimeout(timer);
   }
 }

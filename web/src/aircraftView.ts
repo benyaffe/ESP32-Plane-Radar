@@ -157,13 +157,28 @@ function pickPlacement(
   taken: Rect[],
 ): Placement {
   const tagW = Math.max(callsignW, altW, CALLSIGN_MIN_WIDTH);
-  // Bias alignment toward whichever side has more room on the disc,
-  // so tags for aircraft near the right edge default to LEFT-anchored
-  // (tag to the LEFT of the icon).
-  const iconInRightHalf = cx > CENTER_X;
-  interface Try { rect: Rect; align: "left" | "right"; anchorX: number; anchorY: number }
+  // For aircraft near the disc edge, the smart-money slots are the
+  // ones that point INWARD (back toward the center). Sort the slot
+  // angles by how much they lean toward center from this icon; that
+  // way tags for planes near the eastern edge default to west-of-icon
+  // placement, tags for northern-edge planes go south, etc.
+  const towardCenterAngle = Math.atan2(
+    CENTER_X - cx,      // sin(theta) = east/west from N-up
+    -(CENTER_Y - cy),   // cos(theta) = north/south
+  ) * 180 / Math.PI;
+  const angleDelta = (a: number) => {
+    let d = a - towardCenterAngle;
+    while (d > 180) d -= 360;
+    while (d < -180) d += 360;
+    return Math.abs(d);
+  };
+  const sortedAngles = [...SLOT_ANGLES_DEG].sort(
+    (a, b) => angleDelta(a) - angleDelta(b),
+  );
+
+  interface Try { rect: Rect; align: "left" | "right"; anchorX: number; anchorY: number; inwardness: number }
   const candidates: Try[] = [];
-  for (const angle of SLOT_ANGLES_DEG) {
+  for (const angle of sortedAngles) {
     const rad = ((angle - 90) * Math.PI) / 180;
     const px = cx + Math.round(Math.cos(rad) * TAG_ANCHOR_R);
     const py = cy + Math.round(Math.sin(rad) * TAG_ANCHOR_R);
@@ -171,31 +186,37 @@ function pickPlacement(
     // Never "center" — pick whichever side gives more headroom.
     let align: "left" | "right";
     let rectX: number;
-    if (dx > 0 || (dx === 0 && !iconInRightHalf)) {
+    if (dx > 0 || (dx === 0 && cx <= CENTER_X)) {
       align = "left";  rectX = px;
     } else {
       align = "right"; rectX = px - tagW;
     }
     const rectY = py - TAG_HEIGHT / 2;
     const rect: Rect = { x: Math.round(rectX), y: Math.round(rectY), w: tagW, h: TAG_HEIGHT };
+    // Inwardness = how much closer to center the tag rect's CENTER is
+    // vs. the icon. Higher = better when the icon is near the edge.
+    const trcx = rect.x + rect.w / 2, trcy = rect.y + rect.h / 2;
+    const tagDist = Math.hypot(trcx - CENTER_X, trcy - CENTER_Y);
+    const iconDist = Math.hypot(cx - CENTER_X, cy - CENTER_Y);
     candidates.push({
       rect, align,
       anchorX: align === "left" ? rect.x : rect.x + rect.w,
       anchorY: py < cy ? rect.y + rect.h : rect.y,
+      inwardness: iconDist - tagDist,
     });
   }
-  // Two-pass: first prefer slots that (a) fit in the disc AND (b) don't
-  // collide with anything taken. Then relax to "fits in disc" only.
-  // Finally fall back to the preferred slot even if it overflows.
+  // Pass 1: fits in disc AND doesn't collide.
   for (const c of candidates) {
     if (!rectFitsInDisc(c.rect)) continue;
     if (taken.some((t) => rectsOverlap(c.rect, t))) continue;
     return c;
   }
+  // Pass 2: fits in disc, allow collision.
   for (const c of candidates) {
     if (rectFitsInDisc(c.rect)) return c;
   }
-  return candidates[0];
+  // Pass 3: pick the one that pushes the tag most inward (least overflow).
+  return [...candidates].sort((a, b) => b.inwardness - a.inwardness)[0];
 }
 
 function formatAltHundreds(altFt: number | null): string {

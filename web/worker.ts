@@ -53,12 +53,19 @@ async function handleAdsb(url: URL): Promise<Response> {
   let resp: Response | null = null;
   let lastStatus = 0;
   for (const upstream of urls) {
+    // Per-upstream 4 s timeout — if this one is slow, move on to the
+    // fallback rather than making the client wait the full 30 s
+    // subrequest budget on a single dead source.
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
     try {
-      const r = await fetch(upstream, fetchOpts);
+      const r = await fetch(upstream, { ...fetchOpts, signal: ctrl.signal });
       if (r.ok) { resp = r; break; }
       lastStatus = r.status;
     } catch {
       lastStatus = 599;
+    } finally {
+      clearTimeout(t);
     }
   }
   if (!resp) {

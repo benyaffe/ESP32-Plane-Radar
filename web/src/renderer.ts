@@ -225,6 +225,10 @@ export function renderFrame(ctx: CanvasRenderingContext2D, data: MapData): void 
     ctx.fill();
   }
   drawCoastline(ctx, view, map.coastline);
+  // Rivers rendered in the coastline color so they read as water. NE
+  // gives us Hudson, Mississippi, Missouri, etc. as centerlines only,
+  // not polygons — good enough at radar zoom to say "there's a river."
+  drawCoastline(ctx, view, map.rivers);
   drawRoads(ctx, view, map.roads);
   unclip(ctx);
 

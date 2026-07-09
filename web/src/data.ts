@@ -39,6 +39,7 @@ export interface MapData {
   coastline: LonLat[][];
   land: LandData;
   roads: RoadLine[];
+  rivers: LonLat[][];
   // CONUS-wide base layers (10 m Natural Earth, simplified harder) so
   // ANY US airport the user picks in the typeahead gets a legible map.
   // Airports table covers every US airport with scheduled service.
@@ -46,6 +47,7 @@ export interface MapData {
   landConus: LandData;
   lakesConus: LandData;
   roadsConus: RoadLine[];
+  riversConus: LonLat[][];
   airports: Record<string, Airport>;
   airportIndex: AirportIndexRow[];
 }
@@ -68,14 +70,17 @@ export function selectMap(data: MapData, lat: number, lon: number): {
   coastline: LonLat[][];
   land: LandData;
   roads: RoadLine[];
+  rivers: LonLat[][];
 } {
   if (isInBay(lat, lon)) {
-    return { coastline: data.coastline, land: data.land, roads: data.roads };
+    return {
+      coastline: data.coastline, land: data.land,
+      roads: data.roads, rivers: data.rivers,
+    };
   }
   return {
-    coastline: data.coastlineConus,
-    land: data.landConus,
-    roads: data.roadsConus,
+    coastline: data.coastlineConus, land: data.landConus,
+    roads: data.roadsConus, rivers: data.riversConus,
   };
 }
 
@@ -96,23 +101,25 @@ async function fetchJSON<T>(url: string): Promise<T> {
 
 export async function loadMapData(basePath = "data"): Promise<MapData> {
   const [
-    coastline, land, roads,
-    coastlineConus, landConus, lakesConus, roadsConus,
+    coastline, land, roads, rivers,
+    coastlineConus, landConus, lakesConus, roadsConus, riversConus,
     airports, airportIndex,
   ] = await Promise.all([
     fetchJSON<LonLat[][]>(`${basePath}/coastline.json`),
     fetchJSON<LandData>(`${basePath}/land.json`),
     fetchJSON<RoadLine[]>(`${basePath}/roads.json`),
+    fetchJSON<LonLat[][]>(`${basePath}/rivers.json`),
     fetchJSON<LonLat[][]>(`${basePath}/coastline_conus.json`),
     fetchJSON<LandData>(`${basePath}/land_conus.json`),
     fetchJSON<LandData>(`${basePath}/lakes_conus.json`),
     fetchJSON<RoadLine[]>(`${basePath}/roads_conus.json`),
+    fetchJSON<LonLat[][]>(`${basePath}/rivers_conus.json`),
     fetchJSON<Record<string, Airport>>(`${basePath}/airports.json`),
     fetchJSON<AirportIndexRow[]>(`${basePath}/airport_index.json`),
   ]);
   return {
-    coastline, land, roads,
-    coastlineConus, landConus, lakesConus, roadsConus,
+    coastline, land, roads, rivers,
+    coastlineConus, landConus, lakesConus, roadsConus, riversConus,
     airports, airportIndex,
   };
 }

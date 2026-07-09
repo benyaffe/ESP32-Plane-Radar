@@ -108,3 +108,23 @@ Browser port so friends can try the interface without hardware. Same visual lang
 ---
 
 **Default center:** the public code centers on **Sutro Tower** (37.7552 N, 122.4528 W) — the SF broadcast landmark — not any personal address. The real firmware still asks you for your own location via the WiFi setup portal on first boot.
+
+---
+
+## Three-environment parity rule
+
+The stack has **three visual environments** that must stay lockstep:
+
+1. **Hardware firmware** (ESP32-C3 + GC9A01) — `pio run -e supermini`
+2. **SDL desktop emulator** — `pio run -e native`, same C++ as firmware
+3. **Web preview** — `web/`, TypeScript port
+
+Firmware and SDL share source (only host stubs differ under `USE_NATIVE`); the web is a separate TypeScript codebase and cannot autoshare. To keep them from drifting:
+
+- **The SDL emulator is source of truth for what "looks right."** It's the daily-driver during development and its pixels are what the firmware actually shows on a real panel (with the same BGR-swap chain applied).
+- **Colors** — sample from an actual emulator PPM screenshot, not from the C++ constants. `include/ui/radar_theme.h` names colors by their *logical* aviation meaning (e.g. `kAircraftR=255` = "red"), but the panel's BGR order flips channels at display time. What ships on screen is `color565(kAircraftB, kAircraftG, kAircraftR)`, not the raw RGB. Web must mirror the *rendered* pixels, not the logical constants.
+- **Placement math + timing** — every animation offset (e.g. tag alt/type flip lagging fetches by 1.5 s), every slot ring (16-slot tag placement), every clip-to-disc gate — implement in the emulator first, port to web second. Never the other way around.
+- **Data** — geometric baked data (coastlines, land triangles, roads, airports, airspace) comes from the same source files (Natural Earth, OurAirports, FAA, TIGER, OSM) via `scripts/build_*.py`. Firmware bakes to `.cpp`; web bakes to `.json`. Same DP tolerances where practical.
+- **Feature adds** — new radar behaviour lands in `src/ui/*.cpp` first, gets pixel-sampled from the SDL emulator, then ported to `web/src/*.ts`. Any web-only additions (weather map, airport typeahead, dynamic map data) don't need a firmware counterpart.
+
+If a divergence bug lands (web looks different from emulator), the fix is *always* to make the web match the emulator, never the reverse.

@@ -68,6 +68,7 @@ RUNWAYS_URL = (
 )
 
 LAKES_URL = ne_url("10m", "lakes")
+RIVERS_URL = ne_url("10m", "rivers_lake_centerlines")
 
 # OSM-derived coastline data, pre-processed by osmdata.openstreetmap.de
 # into a global WGS84 shapefile. Much higher fidelity than Natural
@@ -94,7 +95,34 @@ CACHE_MAP = {
     "islands": (MINOR_ISLANDS_URL, CACHE_DIR / "ne_10m_minor_islands.geojson"),
     "roads": (ROADS_URL, CACHE_DIR / "ne_10m_roads.geojson"),
     "lakes": (LAKES_URL, CACHE_DIR / "ne_10m_lakes.geojson"),
+    "rivers": (RIVERS_URL, CACHE_DIR / "ne_10m_rivers_lake_centerlines.geojson"),
 }
+
+
+def build_rivers(bbox, tol_deg=0.002):
+    """Rivers as centerlines — Natural Earth 10 m includes Hudson,
+    Mississippi, Missouri, Colorado, etc. OSM `natural=coastline`
+    treats non-tidal rivers as inland (not coastline), so these show
+    up as lines rather than water polygons on the coast dataset. Same
+    format as build_coastline() output."""
+    path = cached(*CACHE_MAP["rivers"])
+    if path is None:
+        return []
+    data = json.loads(path.read_text())
+    out = []
+    for feat in data.get("features", []):
+        geom = feat.get("geometry") or {}
+        gtype = geom.get("type")
+        raw = geom.get("coordinates") or []
+        if gtype == "LineString": chunks = [raw]
+        elif gtype == "MultiLineString": chunks = raw
+        else: continue
+        for coords in chunks:
+            for clipped in clip_polyline(coords, bbox):
+                simplified = dp_simplify(clipped, tol_deg)
+                if len(simplified) >= 2:
+                    out.append([round_pt(p) for p in simplified])
+    return out
 
 
 def cached(url: str, path: Path) -> Path | None:
@@ -668,6 +696,11 @@ def build_conus() -> None:
     # Overpass build-time query; deferred until visually needed.
     lakes = build_land(conus_bbox, tol_deg=0.001, layer_keys=("lakes",))
     emit(OUT_DIR / "lakes_conus.json", lakes)
+    # Rivers as centerlines. Fills the gap for major rivers like the
+    # Hudson that OSM tags as `waterway=river` (not coastline) — those
+    # otherwise render as landmass on the coastline dataset.
+    rivers = build_rivers(conus_bbox, tol_deg=0.001)
+    emit(OUT_DIR / "rivers_conus.json", rivers)
     # Roads: TIGER/Line primary roads (Interstates + US + State
     # Routes), from the US Census Bureau. Public domain, US-only,
     # 17 k line segments, single ~38 MB shapefile download. ~10 m
@@ -703,6 +736,9 @@ def main() -> None:
 
     roads = build_roads(bbox)
     emit(OUT_DIR / "roads.json", roads)
+
+    rivers = build_rivers(bbox)
+    emit(OUT_DIR / "rivers.json", rivers)
 
     detailed, index = build_airports(bbox)
     emit(OUT_DIR / "airports.json", detailed)
