@@ -1270,9 +1270,9 @@ void drawStaticGrid(Gfx& gfx) {
   // Above roads so airspace edges over freeways still read; under labels
   // + runways + aircraft.
   ui::airspace::draw(gfx);
-  // Order among these matters: cardinals + airports register bounding rects
-  // with labels::, then the scale label dodges around them.
-  drawCardinalLabels();
+  // Order matters: airport labels register bounding rects with labels::,
+  // then the scale label dodges around them. (N/E/S/W cardinals were
+  // removed — north is always up on a radar, so those pixels are wasted.)
   runway::drawLargeAirportRunways(gfx);
   drawCenterDot(cx, cy);
   drawScaleLabel(cx, cy, grid_r);
