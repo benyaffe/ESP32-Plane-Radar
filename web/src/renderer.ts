@@ -187,12 +187,37 @@ export function renderFrame(ctx: CanvasRenderingContext2D, data: MapData): void 
 
   fillBackground(ctx);
   // Pick the appropriate map layers: high-detail Bay Area if the
-  // current center is in-bounds, else CONUS 50m coarse base.
+  // current center is in-bounds, else CONUS base.
   const map = selectMap(data, state.centerLat, state.centerLon);
+  const bay = state.centerLat >= 35.96 && state.centerLat <= 39.56 &&
+              state.centerLon >= -124.69 && state.centerLon <= -120.13;
   // Land is CLIPPED to the outer disc; the coastline/roads sit over it and
   // also inside the disc. Order matches drawStaticGrid in the firmware.
   clipToOuterDisc(ctx);
   drawLand(ctx, view, map.land);
+  // Lakes as WATER cutouts over the land tint — draw them by fillTriangle
+  // in the background color so Great Lakes cities don't look landlocked.
+  // Only makes sense outside the Bay Area where CONUS data covers.
+  if (!bay && state.layers.land) {
+    ctx.fillStyle = COLORS.background;
+    const { vertices, triangles } = data.lakesConus;
+    ctx.beginPath();
+    for (const [ia, ib, ic] of triangles) {
+      const [ax, ay] = project(view, vertices[ia][1], vertices[ia][0]);
+      const [bx, by] = project(view, vertices[ib][1], vertices[ib][0]);
+      const [cx, cy] = project(view, vertices[ic][1], vertices[ic][0]);
+      const minX = Math.min(ax, bx, cx);
+      const maxX = Math.max(ax, bx, cx);
+      const minY = Math.min(ay, by, cy);
+      const maxY = Math.max(ay, by, cy);
+      if (maxX < 0 || minX >= SIZE || maxY < 0 || minY >= SIZE) continue;
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.lineTo(cx, cy);
+      ctx.closePath();
+    }
+    ctx.fill();
+  }
   drawCoastline(ctx, view, map.coastline);
   drawRoads(ctx, view, map.roads);
   unclip(ctx);

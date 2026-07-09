@@ -5,3 +5,4 @@ release/
 .vscode/launch.json
 .vscode/ipch
 .local-data/
+scripts/__pycache__/

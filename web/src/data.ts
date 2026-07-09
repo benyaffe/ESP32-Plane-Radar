@@ -44,6 +44,7 @@ export interface MapData {
   // Airports table covers every US airport with scheduled service.
   coastlineConus: LonLat[][];
   landConus: LandData;
+  lakesConus: LandData;
   roadsConus: RoadLine[];
   airports: Record<string, Airport>;
   airportIndex: AirportIndexRow[];
@@ -96,7 +97,7 @@ async function fetchJSON<T>(url: string): Promise<T> {
 export async function loadMapData(basePath = "data"): Promise<MapData> {
   const [
     coastline, land, roads,
-    coastlineConus, landConus, roadsConus,
+    coastlineConus, landConus, lakesConus, roadsConus,
     airports, airportIndex,
   ] = await Promise.all([
     fetchJSON<LonLat[][]>(`${basePath}/coastline.json`),
@@ -104,13 +105,14 @@ export async function loadMapData(basePath = "data"): Promise<MapData> {
     fetchJSON<RoadLine[]>(`${basePath}/roads.json`),
     fetchJSON<LonLat[][]>(`${basePath}/coastline_conus.json`),
     fetchJSON<LandData>(`${basePath}/land_conus.json`),
+    fetchJSON<LandData>(`${basePath}/lakes_conus.json`),
     fetchJSON<RoadLine[]>(`${basePath}/roads_conus.json`),
     fetchJSON<Record<string, Airport>>(`${basePath}/airports.json`),
     fetchJSON<AirportIndexRow[]>(`${basePath}/airport_index.json`),
   ]);
   return {
     coastline, land, roads,
-    coastlineConus, landConus, roadsConus,
+    coastlineConus, landConus, lakesConus, roadsConus,
     airports, airportIndex,
   };
 }
