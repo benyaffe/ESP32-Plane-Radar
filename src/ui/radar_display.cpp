@@ -1351,4 +1351,8 @@ void radarDisplayRefreshAircraft() {
   radarDisplayDraw();
 }
 
+LGFX_Sprite* radarDisplayFrameSprite() {
+  return ensureFrameSprite() ? &s_frame : nullptr;
+}
+
 }  // namespace ui

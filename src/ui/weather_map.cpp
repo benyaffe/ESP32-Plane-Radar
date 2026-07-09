@@ -1,5 +1,6 @@
 #include "ui/weather_map.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -9,6 +10,7 @@
 #include "hardware/display.h"
 #include "hardware/display_font.h"
 #include "services/weather.h"
+#include "ui/radar_display.h"
 #include "ui/radar_theme.h"
 
 namespace ui::weather {
@@ -28,6 +30,19 @@ constexpr float kE7               = 1e-7f;
 float s_center_lat = 0.0f;
 float s_center_lon = 0.0f;
 float s_px_per_km  = 1.0f;
+
+// Post-projection screen positions, after collision-nudge. Sized to a
+// generous cap because the fixed weather station list never approaches
+// this. Filled by placeStations() before draw.
+constexpr size_t kMaxStations = 32;
+int s_sx[kMaxStations] = {0};
+int s_sy[kMaxStations] = {0};
+
+// Minimum center-to-center pixel separation for two station dots. Below
+// this the pair is nudged apart along their connecting axis. Sized so
+// two dots + their labels don't step on each other at the current text
+// setting.
+constexpr int kMinSepPx = 22;
 
 void computeFit() {
   const services::weather::Station* st = services::weather::stations();
@@ -78,12 +93,23 @@ bool insideDisc(int x, int y) {
   return dx * dx + dy * dy <= kProjectionPx * kProjectionPx;
 }
 
-// Land: iterate the baked triangles and fill them at weather zoom. Each
-// triangle spans three vertices already in the baked cache; we just
-// re-project them here. Any triangle entirely outside the projection
-// disc is dropped early. Triangles clipping the disc still draw and
-// spill past the boundary — the bezel mask at the end catches the
-// overflow.
+// True when a segment or triangle's screen bbox overlaps the 240×240
+// framebuffer at all. Correctly keeps big features whose *vertices*
+// project off-screen but whose *interior* still covers the viewport —
+// which is exactly what happens at high zoom levels with the baked
+// Natural Earth polygons.
+bool bboxOverlapsScreen(int min_x, int max_x, int min_y, int max_y) {
+  if (max_x < 0 || min_x >= radar::kSize) return false;
+  if (max_y < 0 || min_y >= radar::kSize) return false;
+  return true;
+}
+
+// Land: iterate the baked triangles and fill them at weather zoom.
+// Reject only when the triangle's screen bbox is fully off-frame —
+// vertex-based "inside the projection disc" tests are wrong at high
+// zoom, because a triangle whose three corners all project past the
+// bezel can still cover the visible disc entirely (imagine a big
+// Central Valley triangle when we're zoomed on the Bay).
 void drawLand(lgfx::LGFXBase& gfx) {
   const uint16_t color = radar::kColorLand;
   for (size_t i = 0; i < data::land::kTriangleCount; ++i) {
@@ -95,17 +121,17 @@ void drawLand(lgfx::LGFXBase& gfx) {
     projectLatLon(v0.lat_e7 * kE7, v0.lon_e7 * kE7, &x0, &y0);
     projectLatLon(v1.lat_e7 * kE7, v1.lon_e7 * kE7, &x1, &y1);
     projectLatLon(v2.lat_e7 * kE7, v2.lon_e7 * kE7, &x2, &y2);
-    if (!insideDisc(x0, y0) && !insideDisc(x1, y1) && !insideDisc(x2, y2)) {
-      continue;
-    }
+    const int min_x = std::min({x0, x1, x2});
+    const int max_x = std::max({x0, x1, x2});
+    const int min_y = std::min({y0, y1, y2});
+    const int max_y = std::max({y0, y1, y2});
+    if (!bboxOverlapsScreen(min_x, max_x, min_y, max_y)) continue;
     gfx.fillTriangle(x0, y0, x1, y1, x2, y2, color);
   }
 }
 
-// Coastline: iterate polylines, quick-reject those wholly outside the
-// disc, drawLine the survivors segment-by-segment. Simpler than a
-// full-clip solution and looks fine at this zoom because coastline is
-// dense (Peninsula, East Bay, Marin all present).
+// Coastline: iterate polylines segment-by-segment. Reject only if the
+// segment bbox is off-frame — same reasoning as drawLand.
 void drawCoast(lgfx::LGFXBase& gfx) {
   const uint16_t color = tft.color565(radar::kBgR + 40, radar::kBgG + 60,
                                       radar::kBgB + 40);
@@ -117,9 +143,49 @@ void drawCoast(lgfx::LGFXBase& gfx) {
       int ax, ay, bx, by;
       projectLatLon(a.lat_e7 * kE7, a.lon_e7 * kE7, &ax, &ay);
       projectLatLon(b.lat_e7 * kE7, b.lon_e7 * kE7, &bx, &by);
-      if (!insideDisc(ax, ay) && !insideDisc(bx, by)) continue;
+      const int min_x = std::min(ax, bx);
+      const int max_x = std::max(ax, bx);
+      const int min_y = std::min(ay, by);
+      const int max_y = std::max(ay, by);
+      if (!bboxOverlapsScreen(min_x, max_x, min_y, max_y)) continue;
       gfx.drawLine(ax, ay, bx, by, color);
     }
+  }
+}
+
+// Project every station, then relax overlapping pairs by pushing them
+// apart along the connecting axis. A few iterations is enough for the
+// small fixed station set (the weather view isn't for navigation, so
+// slight offset from true position reads fine).
+void placeStations() {
+  const services::weather::Station* stations = services::weather::stations();
+  const size_t n = services::weather::stationCount();
+  for (size_t i = 0; i < n && i < kMaxStations; ++i) {
+    projectLatLon(stations[i].lat, stations[i].lon, &s_sx[i], &s_sy[i]);
+  }
+  // Simple iterative relaxation. 4 passes handles chains like PAO-NUQ-SJC
+  // without ping-ponging.
+  for (int pass = 0; pass < 4; ++pass) {
+    bool moved = false;
+    for (size_t i = 0; i < n && i < kMaxStations; ++i) {
+      for (size_t j = i + 1; j < n && j < kMaxStations; ++j) {
+        const float dx = static_cast<float>(s_sx[j] - s_sx[i]);
+        const float dy = static_cast<float>(s_sy[j] - s_sy[i]);
+        const float d  = std::sqrt(dx * dx + dy * dy);
+        if (d >= kMinSepPx) continue;
+        // If two dots landed on the exact same pixel, pick an arbitrary
+        // direction to separate them.
+        const float ux = (d > 0.01f) ? (dx / d) : 1.0f;
+        const float uy = (d > 0.01f) ? (dy / d) : 0.0f;
+        const float push = (kMinSepPx - d) * 0.5f + 0.5f;
+        s_sx[i] -= static_cast<int>(std::lroundf(ux * push));
+        s_sy[i] -= static_cast<int>(std::lroundf(uy * push));
+        s_sx[j] += static_cast<int>(std::lroundf(ux * push));
+        s_sy[j] += static_cast<int>(std::lroundf(uy * push));
+        moved = true;
+      }
+    }
+    if (!moved) break;
   }
 }
 
@@ -127,12 +193,12 @@ void drawStations(lgfx::LGFXBase& gfx) {
   const services::weather::Station* stations = services::weather::stations();
   const size_t n = services::weather::stationCount();
   displayFontEnsureLoaded(gfx);
-  gfx.setTextSize(0.60f);
+  gfx.setTextSize(0.80f);
   gfx.setTextDatum(textdatum_t::top_center);
 
-  for (size_t i = 0; i < n; ++i) {
-    int sx = 0, sy = 0;
-    projectLatLon(stations[i].lat, stations[i].lon, &sx, &sy);
+  for (size_t i = 0; i < n && i < kMaxStations; ++i) {
+    const int sx = s_sx[i];
+    const int sy = s_sy[i];
     if (!insideDisc(sx, sy)) continue;
 
     const uint16_t color = categoryColor(stations[i].category);
@@ -143,13 +209,13 @@ void drawStations(lgfx::LGFXBase& gfx) {
     const char* id = stations[i].icao;
     if (id[0] == 'K' && id[1]) id++;
     gfx.setTextColor(radar::kColorLabel, radar::kColorBackground);
-    gfx.drawString(id, sx, sy + 7);
+    gfx.drawString(id, sx, sy + 8);
   }
 }
 
 void drawFreshness(lgfx::LGFXBase& gfx) {
   const unsigned long last = services::weather::lastUpdateMs();
-  gfx.setTextSize(0.40f);
+  gfx.setTextSize(0.50f);
   gfx.setTextDatum(textdatum_t::top_center);
   gfx.setTextColor(radar::kColorGrid, radar::kColorBackground);
   char buf[24];
@@ -179,15 +245,24 @@ void refresh() {
 
 void draw() {
   computeFit();
-  tft.fillScreen(radar::kColorBackground);
-  drawLand(tft);
-  drawCoast(tft);
-  drawFreshness(tft);
-  drawStations(tft);
+  placeStations();
+  // Composite into the shared 240×240 sprite, then blit in a single
+  // pushSprite. Drawing straight to the panel every ~1 s (as the
+  // freshness updater does) produces a visible ~1 Hz flash — the
+  // sprite hides the intermediate erase.
+  LGFX_Sprite* sp = radarDisplayFrameSprite();
+  lgfx::LGFXBase& gfx = sp ? static_cast<lgfx::LGFXBase&>(*sp)
+                           : static_cast<lgfx::LGFXBase&>(tft);
+  gfx.fillScreen(radar::kColorBackground);
+  drawLand(gfx);
+  drawCoast(gfx);
+  drawFreshness(gfx);
+  drawStations(gfx);
   // Bezel mask — same as the radar view. Keeps SDL visually matched to
   // the round physical panel.
-  tft.fillArc(radar::kCenterX, radar::kCenterY, radar::kSize + 8, 120, 0, 360,
+  gfx.fillArc(radar::kCenterX, radar::kCenterY, radar::kSize + 8, 120, 0, 360,
               radar::kColorBackground);
+  if (sp) sp->pushSprite(0, 0);
 }
 
 }  // namespace ui::weather
