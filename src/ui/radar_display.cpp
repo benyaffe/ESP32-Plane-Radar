@@ -1295,12 +1295,26 @@ bool ensureFrameSprite() {
 // Double-buffered frame: composite the grid AND aircraft into the off-screen
 // sprite, then blit it to the panel in a single pushSprite. Because the panel
 // is updated in one pass, labels never show an erase/redraw gap — no flicker.
+// The GC9A01 is a physically ROUND 240 px panel — pixels outside a disc of
+// radius ~120 are hidden by the bezel. Paint them back to background as a
+// final step so (a) the SDL emulator visually matches what hardware shows,
+// and (b) anything a code path accidentally drew into the corners doesn't
+// mask a real fix. The mask is fillArc from just past the physical panel
+// edge to the corner.
+constexpr int kPhysicalPanelRadius = 120;
+
+void applyBezelMask(lgfx::LGFXBase& gfx) {
+  gfx.fillArc(radar::kCenterX, radar::kCenterY, radar::kSize + 8,
+              kPhysicalPanelRadius, 0, 360, radar::kColorBackground);
+}
+
 void renderFrame() {
   drawStaticGrid(s_frame);  // opens its own DrawScope(s_frame)
   {
     const DrawScope scope(s_frame);
     drawAircraft();
   }
+  applyBezelMask(s_frame);
   s_frame.pushSprite(0, 0);
   tft.setTextDatum(textdatum_t::top_left);
 }
@@ -1320,6 +1334,7 @@ void radarDisplayDraw() {
   const DrawScope scope(tft);
   drawStaticGrid(tft);
   drawAircraft();
+  applyBezelMask(tft);
   tft.setTextDatum(textdatum_t::top_left);
 }
 
