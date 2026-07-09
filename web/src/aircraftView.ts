@@ -122,11 +122,33 @@ function rectsOverlap(a: Rect, b: Rect): boolean {
 // Try each of 16 slots around the icon. For each slot pick the tag
 // rect that would sit there and check against everything already taken.
 // Return the winning rect + orientation info the tag renderer needs.
+//
+// Alignment rule: tag ALWAYS aligns left or right — never center.
+// Aircraft directly above or below the icon still get L/R alignment
+// picked by whichever side has more room on the disc. Matches firmware.
 interface Placement {
   rect: Rect;
   anchorX: number; anchorY: number;   // tag corner nearest the icon (leader endpoint)
-  align: "left" | "right" | "center";
-  labelSide: "top" | "bottom";        // is the tag above or below the icon
+  align: "left" | "right";
+}
+
+// Import from theme to know the panel radius for clamping.
+import { PHYSICAL_PANEL_RADIUS, CENTER_X, CENTER_Y } from "./theme";
+
+function rectFitsInDisc(r: Rect): boolean {
+  // Clamp target: all four corners inside the physical panel (bezel)
+  // so the tag doesn't get cut off by the round display edge.
+  const corners: [number, number][] = [
+    [r.x, r.y], [r.x + r.w, r.y],
+    [r.x, r.y + r.h], [r.x + r.w, r.y + r.h],
+  ];
+  for (const [x, y] of corners) {
+    const dx = x - CENTER_X, dy = y - CENTER_Y;
+    if (dx * dx + dy * dy > (PHYSICAL_PANEL_RADIUS - 1) * (PHYSICAL_PANEL_RADIUS - 1)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function pickPlacement(
@@ -135,48 +157,45 @@ function pickPlacement(
   taken: Rect[],
 ): Placement {
   const tagW = Math.max(callsignW, altW, CALLSIGN_MIN_WIDTH);
+  // Bias alignment toward whichever side has more room on the disc,
+  // so tags for aircraft near the right edge default to LEFT-anchored
+  // (tag to the LEFT of the icon).
+  const iconInRightHalf = cx > CENTER_X;
+  interface Try { rect: Rect; align: "left" | "right"; anchorX: number; anchorY: number }
+  const candidates: Try[] = [];
   for (const angle of SLOT_ANGLES_DEG) {
     const rad = ((angle - 90) * Math.PI) / 180;
     const px = cx + Math.round(Math.cos(rad) * TAG_ANCHOR_R);
     const py = cy + Math.round(Math.sin(rad) * TAG_ANCHOR_R);
-    // Alignment: tag right of icon → text starts on tag's LEFT edge
-    // (align "left"); tag left of icon → align "right"; near-vertical → center.
     const dx = px - cx;
-    let align: "left" | "right" | "center";
+    // Never "center" — pick whichever side gives more headroom.
+    let align: "left" | "right";
     let rectX: number;
-    if (dx > 4) {
-      align = "left";
-      rectX = px;
-    } else if (dx < -4) {
-      align = "right";
-      rectX = px - tagW;
+    if (dx > 0 || (dx === 0 && !iconInRightHalf)) {
+      align = "left";  rectX = px;
     } else {
-      align = "center";
-      rectX = px - tagW / 2;
+      align = "right"; rectX = px - tagW;
     }
     const rectY = py - TAG_HEIGHT / 2;
-    const rect: Rect = {
-      x: Math.round(rectX), y: Math.round(rectY),
-      w: tagW, h: TAG_HEIGHT,
-    };
-    if (taken.some((t) => rectsOverlap(rect, t))) continue;
-    return {
-      rect,
-      anchorX: dx > 0 ? rect.x : (dx < 0 ? rect.x + rect.w : rect.x + rect.w / 2),
+    const rect: Rect = { x: Math.round(rectX), y: Math.round(rectY), w: tagW, h: TAG_HEIGHT };
+    candidates.push({
+      rect, align,
+      anchorX: align === "left" ? rect.x : rect.x + rect.w,
       anchorY: py < cy ? rect.y + rect.h : rect.y,
-      align,
-      labelSide: py < cy ? "top" : "bottom",
-    };
+    });
   }
-  // Fallback: preferred slot regardless of collision.
-  const rad = ((SLOT_ANGLES_DEG[0] - 90) * Math.PI) / 180;
-  const px = cx + Math.round(Math.cos(rad) * TAG_ANCHOR_R);
-  const py = cy + Math.round(Math.sin(rad) * TAG_ANCHOR_R);
-  const rect = {
-    x: Math.round(px), y: Math.round(py - TAG_HEIGHT / 2),
-    w: tagW, h: TAG_HEIGHT,
-  };
-  return { rect, anchorX: rect.x, anchorY: rect.y + rect.h, align: "left", labelSide: "bottom" };
+  // Two-pass: first prefer slots that (a) fit in the disc AND (b) don't
+  // collide with anything taken. Then relax to "fits in disc" only.
+  // Finally fall back to the preferred slot even if it overflows.
+  for (const c of candidates) {
+    if (!rectFitsInDisc(c.rect)) continue;
+    if (taken.some((t) => rectsOverlap(c.rect, t))) continue;
+    return c;
+  }
+  for (const c of candidates) {
+    if (rectFitsInDisc(c.rect)) return c;
+  }
+  return candidates[0];
 }
 
 function formatAltHundreds(altFt: number | null): string {
@@ -288,6 +307,33 @@ interface Placed {
   tagged: boolean;
 }
 
+// Aircraft just OUTSIDE the visible range get a small dot on the ring
+// edge in their direction, so you know "hey, one's coming from over
+// there." Same pattern as beyondRingEdgeDotFromLatLon in the firmware.
+function drawBeyondRingDot(
+  ctx: CanvasRenderingContext2D,
+  view: ViewFrame,
+  a: Aircraft,
+): boolean {
+  const [x, y] = project(view, a.lat, a.lon);
+  const dx = x - CENTER_X;
+  const dy = y - CENTER_Y;
+  const d2 = dx * dx + dy * dy;
+  // Inside disc: no beyond-ring dot needed.
+  if (d2 <= GRID_OUTER_RADIUS * GRID_OUTER_RADIUS) return false;
+  // Too far out (~2x range): don't bother.
+  const maxR2 = (GRID_OUTER_RADIUS * 2) * (GRID_OUTER_RADIUS * 2);
+  if (d2 > maxR2) return true;   // outside our care but we DID skip
+  const d = Math.sqrt(d2);
+  const ex = CENTER_X + Math.round(dx / d * (GRID_OUTER_RADIUS - 2));
+  const ey = CENTER_Y + Math.round(dy / d * (GRID_OUTER_RADIUS - 2));
+  ctx.fillStyle = iconColor(a);
+  ctx.beginPath();
+  ctx.arc(ex, ey, 2, 0, Math.PI * 2);
+  ctx.fill();
+  return true;
+}
+
 export function drawAircraft(
   ctx: CanvasRenderingContext2D,
   view: ViewFrame,
@@ -302,7 +348,12 @@ export function drawAircraft(
     if (isOnGround(a)) continue;
     const [x, y] = project(view, a.lat, a.lon);
     const d2 = distSqFromCenter(x, y);
-    if (d2 > GRID_OUTER_RADIUS * GRID_OUTER_RADIUS) continue;
+    if (d2 > GRID_OUTER_RADIUS * GRID_OUTER_RADIUS) {
+      // Aircraft outside the ring — draw a small dot on the edge in
+      // its direction (same as the firmware's beyond-ring dot).
+      drawBeyondRingDot(ctx, view, a);
+      continue;
+    }
     placed.push({ icon: [x, y], a, d2, clarity: clarityScore(a), tagged: false });
   }
 

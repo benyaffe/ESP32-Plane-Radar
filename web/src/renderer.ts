@@ -55,7 +55,10 @@ function drawLand(ctx: CanvasRenderingContext2D, view: ViewFrame, land: MapData[
     ctx.lineTo(cx, cy);
     ctx.closePath();
   }
-  ctx.fill();
+  // evenodd winding rule guards against overlapping/degenerate
+  // ear-clip triangles cancelling each other out — nonzero can leave
+  // holes if any triangle winds the other way.
+  ctx.fill("evenodd");
 }
 
 function drawCoastline(ctx: CanvasRenderingContext2D, view: ViewFrame, coastline: MapData["coastline"]): void {
@@ -148,7 +151,10 @@ function drawCenterDot(ctx: CanvasRenderingContext2D): void {
   ctx.fillStyle = COLORS.centerDot;
   ctx.beginPath();
   ctx.arc(CENTER_X, CENTER_Y, 2, 0, Math.PI * 2);
-  ctx.fill();
+  // evenodd winding rule guards against overlapping/degenerate
+  // ear-clip triangles cancelling each other out — nonzero can leave
+  // holes if any triangle winds the other way.
+  ctx.fill("evenodd");
 }
 
 // Scale label — small, near the top, using kBaseDeg=12° offset from N

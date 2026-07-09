@@ -48,6 +48,20 @@ function drawLoadingState(ctx: CanvasRenderingContext2D, msg: string): void {
   ctx.fillText(msg, 120, 120);
 }
 
+// Double-buffered draw: we composite the whole frame into a 240×240
+// offscreen canvas, then blit to the visible canvas in a single
+// drawImage() call. Prevents any partial-frame flash you'd see if
+// each layer painted straight onto the visible canvas.
+let offscreen: HTMLCanvasElement | null = null;
+function getOffscreen(): HTMLCanvasElement {
+  if (!offscreen) {
+    offscreen = document.createElement("canvas");
+    offscreen.width = 240;
+    offscreen.height = 240;
+  }
+  return offscreen;
+}
+
 let frameQueued = false;
 function requestFrame(): void {
   if (frameQueued) return;
@@ -56,17 +70,21 @@ function requestFrame(): void {
     frameQueued = false;
     const canvas = document.getElementById("radar") as HTMLCanvasElement | null;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const visible = canvas.getContext("2d");
+    if (!visible) return;
+    const buf = getOffscreen();
+    const bctx = buf.getContext("2d");
+    if (!bctx) return;
     if (!mapData) {
-      drawLoadingState(ctx, "loading map…");
-      return;
-    }
-    if (state.view === "weather") {
-      drawWeatherView(ctx, mapData);
+      drawLoadingState(bctx, "loading map…");
+    } else if (state.view === "weather") {
+      drawWeatherView(bctx, mapData);
     } else {
-      renderFrame(ctx, mapData);
+      renderFrame(bctx, mapData);
     }
+    // Single blit — the visible canvas never shows a partial frame.
+    visible.clearRect(0, 0, 240, 240);
+    visible.drawImage(buf, 0, 0);
   });
 }
 
