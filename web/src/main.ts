@@ -124,6 +124,7 @@ subscribe(() => {
 // Aircraft fetch loop. Fires immediately on center/range change plus
 // every 3 s while the radar view is active. Skipped in weather mode.
 let aircraftFetchInFlight = false;
+let modeFlipTimer: number | null = null;
 async function pollAircraft(): Promise<void> {
   if (state.view !== "radar") return;
   if (aircraftFetchInFlight) return;
@@ -134,6 +135,13 @@ async function pollAircraft(): Promise<void> {
     const nm = RANGE_PRESETS[state.rangeIdx].nm * 1.1;
     await fetchAircraft(state.centerLat, state.centerLon, nm);
     requestFrame();
+    // Schedule a redraw 1.5 s after the fetch so the tag alt/type
+    // toggle actually flips on screen — the mode changes 1.5 s AFTER
+    // each fetch (see tagShowsAltitude in aircraftView.ts), which is
+    // when the mode flip becomes visible even if no other input has
+    // triggered a repaint.
+    if (modeFlipTimer !== null) clearTimeout(modeFlipTimer);
+    modeFlipTimer = window.setTimeout(() => requestFrame(), 1500);
   } finally {
     aircraftFetchInFlight = false;
   }

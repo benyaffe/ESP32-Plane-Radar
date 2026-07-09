@@ -67,11 +67,14 @@ RUNWAYS_URL = (
     "runways.csv"
 )
 
+LAKES_URL = ne_url("10m", "lakes")
+
 CACHE_MAP = {
     "coastline": (COASTLINE_URL, CACHE_DIR / "ne_10m_coastline.geojson"),
     "land": (LAND_URL, CACHE_DIR / "ne_10m_land.geojson"),
     "islands": (MINOR_ISLANDS_URL, CACHE_DIR / "ne_10m_minor_islands.geojson"),
     "roads": (ROADS_URL, CACHE_DIR / "ne_10m_roads.geojson"),
+    "lakes": (LAKES_URL, CACHE_DIR / "ne_10m_lakes.geojson"),
 }
 
 
@@ -293,10 +296,10 @@ def _polygon_bbox_overlap(poly, bbox):
     return True
 
 
-def build_land(bbox, tol_deg=0.003):
+def build_land(bbox, tol_deg=0.003, layer_keys=("land", "islands")):
     vertices = []  # global (lon, lat) list
     triangles = []  # (v0, v1, v2) indices
-    for key in ("land", "islands"):
+    for key in layer_keys:
         path = cached(*CACHE_MAP[key])
         if path is None:
             continue
@@ -514,22 +517,34 @@ def emit(path: Path, payload) -> None:
 def build_conus() -> None:
     """Bake CONUS-wide base layers so ANY US airport the user picks in
     the typeahead gets a legible map. Uses the same 10 m Natural Earth
-    sources as the Bay Area bakes, but simplified harder to keep the
-    payload down. High-detail Bay Area layers are still layered on top
-    when the current center falls inside the Bay bbox — see
-    selectMap() in web/src/data.ts."""
+    sources as the Bay Area bakes, DP-simplified at ~500 m — which is
+    the effective pixel resolution at the widest 25 nm zoom. High-
+    detail Bay Area layers are still layered on top when the current
+    center falls inside the Bay bbox — see selectMap() in
+    web/src/data.ts."""
     # CONUS bbox: (min_lat, max_lat, min_lon, max_lon) — southern tip of
-    # Florida to northern Minnesota, coast to coast.
+    # Florida to northern Minnesota, coast to coast. Includes a bit of
+    # southern Canada to catch the Great Lakes properly.
     conus_bbox = (24.0, 50.0, -125.0, -66.0)
-    # 10 m sources, simplified aggressively: ~2 km tolerance for the
-    # coastline (still legible on the 240 px canvas at range 25 nm),
-    # ~1 km for major roads.
-    coast = build_coastline(conus_bbox, tol_deg=0.02)
+    # Tolerance target ≈ 500 m = the pixel size at the widest range
+    # preset on a 240 px canvas.
+    coast = build_coastline(conus_bbox, tol_deg=0.005)
     emit(OUT_DIR / "coastline_conus.json", coast)
-    land = build_land(conus_bbox, tol_deg=0.05)
+    # Land + minor islands + lakes (Great Lakes, Salton Sea, etc.) all
+    # emitted into land_conus as triangles. The renderer just paints
+    # the tint color; whether it's a fresh water lake or a landmass
+    # doesn't matter for the "spatial context" purpose here.
+    land = build_land(conus_bbox, tol_deg=0.005,
+                      layer_keys=("land", "islands"))
     emit(OUT_DIR / "land_conus.json", land)
-    roads = build_roads(conus_bbox, tol_deg=0.01,
-                        keep_types=("Major Highway",))
+    # Lakes as their own layer so they can render as WATER cutouts
+    # (background color) over the land tint — otherwise Great Lakes
+    # cities read as landlocked.
+    lakes = build_land(conus_bbox, tol_deg=0.005, layer_keys=("lakes",))
+    emit(OUT_DIR / "lakes_conus.json", lakes)
+    # Major + Secondary highways; DP tol ≈ 300 m.
+    roads = build_roads(conus_bbox, tol_deg=0.003,
+                        keep_types=("Major Highway", "Secondary Highway"))
     emit(OUT_DIR / "roads_conus.json", roads)
 
 

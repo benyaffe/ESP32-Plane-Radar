@@ -191,38 +191,37 @@ function trendGlyph(vsFpm: number): string {
   return "";
 }
 
-// Tag mode toggles once per fetch (~3 s), so the alt/type flip lines
-// up with the position update rather than fighting it. This is the
-// same "latched per fetch" trick the firmware uses.
-let s_altModeAtSlot = new Map<string, boolean>();
-let s_lastFetchTag = 0;
-function tagShowsAltitude(icao: string, fetchNum: number): boolean {
-  if (fetchNum !== s_lastFetchTag) {
-    s_lastFetchTag = fetchNum;
-    // Flip the mode for every callsign at fetch boundary.
-    const next = new Map<string, boolean>();
-    for (const [k, v] of s_altModeAtSlot) next.set(k, !v);
-    s_altModeAtSlot = next;
+// Tag mode toggle — mirrors the firmware exactly:
+//   - Toggle at most once per fetch (guarded by fetchCount).
+//   - Only toggle after 1.5 s have passed since the fetch — the mode
+//     flip lags the position update, so viewers see:
+//     … position update (mode: alt) … 1.5s pause … flip to type
+//       … 1.5s pause … position update (mode: type) … 1.5s pause …
+//       flip to alt … and so on.
+//   - Each mode gets a full 3 s dwell. Position and mode never change
+//     at the same instant.
+const MODE_TOGGLE_OFFSET_MS = 1500;
+let s_showAlt = true;
+let s_toggledAtFetch = 0;
+function tagShowsAltitude(fetchNum: number, lastUpdateMs: number): boolean {
+  const since = Date.now() - lastUpdateMs;
+  if (fetchNum !== s_toggledAtFetch && since >= MODE_TOGGLE_OFFSET_MS) {
+    s_showAlt = !s_showAlt;
+    s_toggledAtFetch = fetchNum;
   }
-  const cur = s_altModeAtSlot.get(icao);
-  if (cur === undefined) {
-    s_altModeAtSlot.set(icao, true);
-    return true;
-  }
-  return cur;
+  return s_showAlt;
 }
 
 function drawTag(
   ctx: CanvasRenderingContext2D,
   p: Placement,
   a: Aircraft,
-  fetchNum: number,
+  showAlt: boolean,
 ): void {
   ctx.font = "8px system-ui, sans-serif";
   ctx.textBaseline = "top";
   ctx.textAlign = p.align;
   const emergency = isEmergency(a);
-  const showAlt = tagShowsAltitude(a.callsign, fetchNum);
 
   const tx =
     p.align === "left" ? p.rect.x + 1 :
@@ -295,7 +294,9 @@ export function drawAircraft(
   aircraft: readonly Aircraft[],
   showTags: boolean,
   fetchNum: number,
+  lastUpdateMs: number,
 ): void {
+  const showAlt = tagShowsAltitude(fetchNum, lastUpdateMs);
   const placed: Placed[] = [];
   for (const a of aircraft) {
     if (isOnGround(a)) continue;
@@ -335,6 +336,6 @@ export function drawAircraft(
     const p = pickPlacement(x, y, callW, line2W, taken);
     taken.push(p.rect);
     drawLeader(ctx, x, y, p);
-    drawTag(ctx, p, a, fetchNum);
+    drawTag(ctx, p, a, showAlt);
   }
 }
