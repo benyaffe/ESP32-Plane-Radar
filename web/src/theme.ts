@@ -18,8 +18,12 @@ export const KM_PER_DEG = 111.0;
 
 // RGB CSS colors — the browser handles color directly, so we skip the
 // 565 conversion path the firmware uses on GC9A01.
+//
+// Convention: WATER is the visibly-tinted surface (dark blue), LAND is
+// near-black. Reads as "black continent floating in dim ocean" — the
+// bay/ocean pops as the recognizable Bay Area shape.
 export const COLORS = {
-  background:      "rgb(4, 10, 28)",
+  background:      "rgb(12, 20, 36)",       // water (dim blue tint)
   grid:            "rgb(16, 101, 33)",
   label:           "rgb(255, 255, 255)",
   aircraft:        "rgb(60, 130, 255)",
@@ -28,8 +32,8 @@ export const COLORS = {
   tagAltitude:     "rgb(255, 240, 100)",
   runway:          "rgb(70, 170, 200)",
   runwayLabel:     "rgb(110, 210, 240)",
-  land:            "rgb(12, 20, 36)",       // dim land tint
-  coastline:       "rgb(44, 70, 68)",       // slightly brighter than land
+  land:            "rgb(4, 10, 28)",        // near-black land
+  coastline:       "rgb(44, 70, 68)",       // subtle teal border
   road:            "rgb(110, 110, 130)",
   emergency:       "rgb(255, 0, 0)",
   centerDot:       "rgb(255, 255, 255)",
