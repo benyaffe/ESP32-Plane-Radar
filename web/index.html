@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#04081c" />
+    <title>Plane Radar — desk toy preview</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <header class="page-title">
+        <h1>Plane Radar</h1>
+        <p class="tagline">a desk toy for spotting Bay Area traffic — preview</p>
+      </header>
+
+      <section class="picker">
+        <input
+          type="search"
+          id="airport-search"
+          placeholder="Search airport (SFO, Palo Alto, KSQL…)"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <ul id="airport-results" role="listbox" hidden></ul>
+      </section>
+
+      <section class="stage">
+        <!-- The 240x240 canvas is the same size as the hardware panel;
+             CSS scales it up for display. imageRendering=pixelated keeps
+             it crisp when scaled. -->
+        <canvas id="radar" width="240" height="240"></canvas>
+      </section>
+
+      <section class="controls">
+        <div class="hints">
+          <span class="hint"><kbd>tap</kbd> range</span>
+          <span class="hint"><kbd>2×</kbd> focus</span>
+          <span class="hint"><kbd>3×</kbd> weather</span>
+        </div>
+        <div class="layers" id="layer-toggles"></div>
+      </section>
+
+      <footer class="page-footer">
+        <a href="https://github.com/yaf-sb/ESP32-Plane-Radar">source</a>
+        · fork of
+        <a href="https://github.com/MatixYo/ESP32-Plane-Radar">MatixYo/ESP32-Plane-Radar</a>
+      </footer>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

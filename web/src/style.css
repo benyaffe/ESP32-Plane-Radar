@@ -1,0 +1,207 @@
+/* Plane Radar preview — mobile-first, dark, minimal. The stage centers
+   the round canvas; everything else is chrome that adapts to width. */
+
+:root {
+  --bg: #04081c;
+  --bg-elevated: #0b1330;
+  --text: #e6e6ec;
+  --text-dim: #7a86ad;
+  --accent: #4dd0e1;
+  --border: #1a2450;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  min-height: 100vh;
+  overscroll-behavior: none;
+}
+
+main {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.page-title h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+.page-title .tagline {
+  margin: 2px 0 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.picker {
+  position: relative;
+}
+#airport-search {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+}
+#airport-search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+#airport-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 10;
+}
+#airport-results li {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+#airport-results li:hover,
+#airport-results li[aria-selected="true"] {
+  background: var(--border);
+}
+#airport-results li .icao {
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-right: 8px;
+}
+
+.stage {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 4px 0;
+}
+
+#radar {
+  /* The panel is 240x240 native. Scale up for readable display. On
+     narrow phones, cap to the viewport width less some padding. */
+  width: min(480px, calc(100vw - 32px));
+  height: min(480px, calc(100vw - 32px));
+  image-rendering: pixelated;
+  border-radius: 50%;
+  touch-action: manipulation;
+  background: transparent;
+}
+
+.controls {
+  display: grid;
+  gap: 10px;
+}
+.hints {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.hint kbd {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  margin-right: 4px;
+}
+
+.layers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+.layers button {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.layers button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.page-footer {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+  padding-bottom: 20px;
+}
+.page-footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.page-footer a:hover {
+  text-decoration: underline;
+}
+
+/* Desktop: legend + hints move to the side of the canvas, not below. */
+@media (min-width: 720px) {
+  main {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "title title"
+      "picker picker"
+      "stage controls"
+      "footer footer";
+  }
+  .page-title {
+    grid-area: title;
+  }
+  .picker {
+    grid-area: picker;
+  }
+  .stage {
+    grid-area: stage;
+  }
+  .controls {
+    grid-area: controls;
+    align-self: center;
+    justify-items: start;
+  }
+  .hints {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .layers {
+    justify-content: flex-start;
+  }
+  .page-footer {
+    grid-area: footer;
+  }
+}
