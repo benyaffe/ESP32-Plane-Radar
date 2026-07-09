@@ -1,7 +1,10 @@
 #include "services/focus_points.h"
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <Preferences.h>
+
+#include <cstring>
 
 #include "services/radar_location.h"
 #include "ui/radar_range.h"
@@ -11,28 +14,118 @@ namespace {
 
 constexpr char kPrefsNamespace[] = "focus";
 constexpr char kPrefsIndexKey[] = "idx";
+constexpr char kPrefsJsonKey[] = "ring";
 constexpr unsigned long kOverlayMs = 1500;
+constexpr size_t kMaxRingSize = 16;
 
-// Bay Area default focus ring. Airport coordinates from OurAirports data;
-// default ranges chosen for each field's typical traffic pattern (Class B/C
-// = 10 nm, GA = 5 nm).
-const FocusPoint kFocusPoints[] = {
-    {"Sutro", 0.0,      0.0,        1 /*10 nm*/, true},   // Sutro Tower, SF (default center)
-    {"SFO",  37.6188,  -122.3750,   1 /*10 nm*/, false},  // Class B
-    {"OAK",  37.7213,  -122.2214,   1 /*10 nm*/, false},  // Class C
-    {"SJC",  37.3639,  -121.9289,   1 /*10 nm*/, false},  // San Jose, Class C
-    {"HWD",  37.6591,  -122.1214,   0 /* 5 nm*/, false},  // Hayward, GA
-    {"SQL",  37.5119,  -122.2495,   0 /* 5 nm*/, false},  // San Carlos, GA
-    {"PAO",  37.4611,  -122.1150,   0 /* 5 nm*/, false},  // Palo Alto, GA
-    {"HAF",  37.5136,  -122.5006,   0 /* 5 nm*/, false},  // Half Moon Bay, GA
-};
-constexpr size_t kFocusCount = sizeof(kFocusPoints) / sizeof(kFocusPoints[0]);
-
+// Runtime-mutable ring. Slot 0 is always synthetic Home (reads its lat/lon
+// from services::location at draw time, so home moves when the user
+// reconfigures). Slots 1..N-1 come from the user's saved JSON, or from the
+// baked default list below if no JSON is stored or the JSON fails to parse.
+FocusPoint s_ring[kMaxRingSize];
+size_t s_ring_count = 0;
 uint8_t s_index = 0;
 unsigned long s_overlay_shown_at_ms = 0;
 
+// Bay Area fallback ring used when the "focus.ring" preference is empty or
+// malformed. Coordinates from OurAirports; default range picked per each
+// field's typical traffic (Class B/C = 10 nm, GA = 5 nm).
+struct BakedAirport {
+  const char* name;
+  double lat;
+  double lon;
+  uint8_t default_range_idx;
+};
+constexpr BakedAirport kFallbackAirports[] = {
+    {"SFO", 37.6188, -122.3750, 1},  // Class B
+    {"OAK", 37.7213, -122.2214, 1},  // Class C
+    {"SJC", 37.3639, -121.9289, 1},  // Class C
+    {"HWD", 37.6591, -122.1214, 0},  // GA
+    {"SQL", 37.5119, -122.2495, 0},  // GA
+    {"PAO", 37.4611, -122.1150, 0},  // GA
+    {"HAF", 37.5136, -122.5006, 0},  // GA
+};
+constexpr size_t kFallbackCount =
+    sizeof(kFallbackAirports) / sizeof(kFallbackAirports[0]);
+
+void setName(FocusPoint& fp, const char* src) {
+  std::strncpy(fp.name, src, sizeof(fp.name) - 1);
+  fp.name[sizeof(fp.name) - 1] = '\0';
+}
+
+void seedHomeSlot() {
+  setName(s_ring[0], "Home");
+  s_ring[0].lat = 0.0;
+  s_ring[0].lon = 0.0;
+  s_ring[0].default_range_idx = 1;
+  s_ring[0].is_home = true;
+}
+
+void appendBakedFallback() {
+  for (size_t i = 0; i < kFallbackCount && s_ring_count < kMaxRingSize; ++i) {
+    FocusPoint& fp = s_ring[s_ring_count++];
+    setName(fp, kFallbackAirports[i].name);
+    fp.lat = kFallbackAirports[i].lat;
+    fp.lon = kFallbackAirports[i].lon;
+    fp.default_range_idx = kFallbackAirports[i].default_range_idx;
+    fp.is_home = false;
+  }
+}
+
+// Returns true if `json` parsed into at least one airport entry (which was
+// appended to s_ring). Leaves s_ring untouched on failure.
+bool tryAppendFromJson(const String& json) {
+  if (json.length() == 0) return false;
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(doc, json);
+  if (err) {
+    Serial.printf("focus: JSON parse error: %s\n", err.c_str());
+    return false;
+  }
+  if (!doc.is<JsonArray>()) {
+    Serial.println("focus: JSON root is not an array");
+    return false;
+  }
+  const size_t before = s_ring_count;
+  for (JsonObject entry : doc.as<JsonArray>()) {
+    if (s_ring_count >= kMaxRingSize) break;
+    const char* name = entry["name"] | "?";
+    const float lat = entry["lat"] | NAN;
+    const float lon = entry["lon"] | NAN;
+    const int range_idx = entry["range_idx"] | 1;
+    if (!(lat >= -90.0f && lat <= 90.0f) ||
+        !(lon >= -180.0f && lon <= 180.0f)) {
+      continue;
+    }
+    FocusPoint& fp = s_ring[s_ring_count++];
+    setName(fp, name);
+    fp.lat = lat;
+    fp.lon = lon;
+    fp.default_range_idx =
+        (range_idx >= 0 && range_idx <= 255) ? static_cast<uint8_t>(range_idx) : 1;
+    fp.is_home = false;
+  }
+  return s_ring_count > before;
+}
+
+void loadRing() {
+  s_ring_count = 0;
+  seedHomeSlot();
+  s_ring_count = 1;
+
+  Preferences prefs;
+  String stored;
+  if (prefs.begin(kPrefsNamespace, true)) {
+    stored = prefs.getString(kPrefsJsonKey, "");
+    prefs.end();
+  }
+  if (!tryAppendFromJson(stored)) {
+    appendBakedFallback();
+  }
+}
+
 void applyCurrent() {
-  const FocusPoint& fp = kFocusPoints[s_index];
+  const FocusPoint& fp = s_ring[s_index];
   if (fp.is_home) {
     services::location::clearOverride();
   } else {
@@ -44,17 +137,19 @@ void applyCurrent() {
 }  // namespace
 
 void init() {
+  loadRing();
   Preferences prefs;
   if (prefs.begin(kPrefsNamespace, true)) {
     const uint8_t saved = prefs.getUChar(kPrefsIndexKey, 0);
     prefs.end();
-    if (saved < kFocusCount) s_index = saved;
+    if (saved < s_ring_count) s_index = saved;
   }
   applyCurrent();
 }
 
 void cycle() {
-  s_index = static_cast<uint8_t>((s_index + 1) % kFocusCount);
+  if (s_ring_count == 0) return;
+  s_index = static_cast<uint8_t>((s_index + 1) % s_ring_count);
   applyCurrent();
   Preferences prefs;
   if (prefs.begin(kPrefsNamespace, false)) {
@@ -62,17 +157,50 @@ void cycle() {
     prefs.end();
   }
   s_overlay_shown_at_ms = millis();
-  Serial.printf("focus: %s (%d)\n", kFocusPoints[s_index].name, s_index);
+  Serial.printf("focus: %s (%d)\n", s_ring[s_index].name, s_index);
 }
 
-const FocusPoint& current() { return kFocusPoints[s_index]; }
+const FocusPoint& current() { return s_ring[s_index]; }
 
-size_t count() { return kFocusCount; }
+size_t count() { return s_ring_count; }
 
 unsigned long overlayRemainingMs() {
   if (s_overlay_shown_at_ms == 0) return 0;
   const unsigned long elapsed = millis() - s_overlay_shown_at_ms;
   return (elapsed >= kOverlayMs) ? 0 : (kOverlayMs - elapsed);
+}
+
+void saveRingJson(const char* json) {
+  if (json == nullptr) return;
+  // Validate parse without touching the live ring; if it doesn't parse,
+  // don't persist junk that init() would reject on next boot anyway.
+  JsonDocument doc;
+  if (deserializeJson(doc, json) || !doc.is<JsonArray>()) {
+    Serial.println("focus: refusing to save invalid ring JSON");
+    return;
+  }
+  Preferences prefs;
+  if (!prefs.begin(kPrefsNamespace, false)) return;
+  prefs.putString(kPrefsJsonKey, json);
+  prefs.end();
+  Serial.println("focus: ring JSON saved (takes effect on next reboot)");
+}
+
+String currentRingJson() {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  // Home is synthetic — never included in the JSON. Only serialize the
+  // user-editable airports (indexes 1..count-1).
+  for (size_t i = 1; i < s_ring_count; ++i) {
+    JsonObject o = arr.add<JsonObject>();
+    o["name"] = s_ring[i].name;
+    o["lat"] = s_ring[i].lat;
+    o["lon"] = s_ring[i].lon;
+    o["range_idx"] = s_ring[i].default_range_idx;
+  }
+  String out;
+  serializeJson(doc, out);
+  return out;
 }
 
 }  // namespace services::focus

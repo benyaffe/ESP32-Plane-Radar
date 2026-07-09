@@ -9,6 +9,7 @@
 #include "data/land.h"
 #include "hardware/display.h"
 #include "hardware/display_font.h"
+#include "services/metar_config.h"
 #include "services/weather.h"
 #include "ui/radar_display.h"
 #include "ui/radar_theme.h"
@@ -16,19 +17,22 @@
 namespace ui::weather {
 namespace {
 
-// Weather-map projection: auto-fit — the center is the geometric middle
-// of the current station set (NOT the user's home/focus), and the scale
-// is picked so the farthest station lands ~12 px inside the bezel. This
-// packs the fixed airport set as densely as possible into the round
-// viewport regardless of which stations are on the list.
+// Weather-map projection: user-configurable center + radius (see
+// services::metar_config). Radius is expressed in nautical miles; scale
+// is chosen so a station at exactly that radius lands just inside the
+// bezel with room for its label. Stations beyond the radius project
+// past the disc and are filtered out by insideDisc() below.
 constexpr int   kProjectionPx     = 108;    // physical bezel is 120
 constexpr int   kLabelMarginPx    = 14;     // reserve for label glyphs
 constexpr float kKmPerDeg         = 111.0f;
+constexpr float kKmPerNm          = 1.852f;
+constexpr float kDegToRad         = 3.14159265358979323846f / 180.0f;
 constexpr float kE7               = 1e-7f;
 
-// Populated by computeFit() on each frame — cheap for 11 stations.
+// Populated by computeFit() on each frame from services::metar_config.
 float s_center_lat = 0.0f;
 float s_center_lon = 0.0f;
+float s_cos_center = 1.0f;
 float s_px_per_km  = 1.0f;
 
 // Dots stay at their true projected positions — never nudged. Labels
@@ -89,29 +93,12 @@ int overlapArea(int ax1, int ay1, int ax2, int ay2,
 }
 
 void computeFit() {
-  const services::weather::Station* st = services::weather::stations();
-  const size_t n = services::weather::stationCount();
-  if (n == 0) return;
-  float min_lat = st[0].lat, max_lat = st[0].lat;
-  float min_lon = st[0].lon, max_lon = st[0].lon;
-  for (size_t i = 1; i < n; ++i) {
-    if (st[i].lat < min_lat) min_lat = st[i].lat;
-    if (st[i].lat > max_lat) max_lat = st[i].lat;
-    if (st[i].lon < min_lon) min_lon = st[i].lon;
-    if (st[i].lon > max_lon) max_lon = st[i].lon;
-  }
-  s_center_lat = (min_lat + max_lat) * 0.5f;
-  s_center_lon = (min_lon + max_lon) * 0.5f;
-  // Farthest station in km from the geometric center.
-  float max_r_km = 0.0f;
-  for (size_t i = 0; i < n; ++i) {
-    const float dx = (st[i].lon - s_center_lon) * kKmPerDeg;
-    const float dy = (st[i].lat - s_center_lat) * kKmPerDeg;
-    const float r  = std::sqrt(dx * dx + dy * dy);
-    if (r > max_r_km) max_r_km = r;
-  }
+  s_center_lat = services::metar_config::centerLat();
+  s_center_lon = services::metar_config::centerLon();
+  s_cos_center = std::cos(s_center_lat * kDegToRad);
+  const float radius_km = services::metar_config::radiusNm() * kKmPerNm;
   const float budget_px = static_cast<float>(kProjectionPx - kLabelMarginPx);
-  s_px_per_km = (max_r_km > 0.0f) ? (budget_px / max_r_km) : 1.0f;
+  s_px_per_km = (radius_km > 0.0f) ? (budget_px / radius_km) : 1.0f;
 }
 
 uint16_t categoryColor(services::weather::Category c) {
@@ -125,7 +112,7 @@ uint16_t categoryColor(services::weather::Category c) {
 }
 
 void projectLatLon(float lat, float lon, int* out_x, int* out_y) {
-  const float dx_km = (lon - s_center_lon) * kKmPerDeg;
+  const float dx_km = (lon - s_center_lon) * kKmPerDeg * s_cos_center;
   const float dy_km = (lat - s_center_lat) * kKmPerDeg;
   *out_x = radar::kCenterX + static_cast<int>(std::lroundf(dx_km * s_px_per_km));
   *out_y = radar::kCenterY - static_cast<int>(std::lroundf(dy_km * s_px_per_km));

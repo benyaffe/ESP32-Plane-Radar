@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Arduino.h>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -11,7 +13,7 @@ namespace services::focus {
 // index (0..3 → 5/10/15/25 nm) auto-applies on focus change so a small
 // GA field defaults to 5 nm while a busy Class B defaults to 10 nm.
 struct FocusPoint {
-  const char* name;         // Short display label: "Home", "SFO", ...
+  char name[16];            // Short display label: "Home", "SFO", ...
   double lat;               // Ignored when is_home = true.
   double lon;               // Ignored when is_home = true.
   uint8_t default_range_idx;
@@ -34,5 +36,14 @@ size_t count();
 /** How long the on-screen focus-name overlay should stay up after the
  *  most recent cycle(). 0 if it should be hidden. */
 unsigned long overlayRemainingMs();
+
+/** Persist the given JSON array of {name, lat, lon, range_idx} objects to
+ *  NVS. Ignored (not saved) if it doesn't parse as a JSON array — the ring
+ *  keeps its live values in that case. Takes effect on next reboot. */
+void saveRingJson(const char* json);
+
+/** Serialize the current runtime ring (excluding the synthetic Home slot)
+ *  as JSON. Used to pre-fill the portal edit field. */
+String currentRingJson();
 
 }  // namespace services::focus

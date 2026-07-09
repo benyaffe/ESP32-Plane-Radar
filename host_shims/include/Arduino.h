@@ -11,7 +11,14 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <thread>
+
+// Native builds don't have Arduino's WString.h. Alias String to std::string
+// so the same firmware source compiles unchanged; std::string exposes the
+// members our code uses (c_str, length, empty, operator=, operator+, +=)
+// and ArduinoJson v7 has native adapters for it.
+using String = std::string;
 
 class HardwareSerial {
  public:

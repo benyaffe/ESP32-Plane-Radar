@@ -49,6 +49,13 @@ constexpr bool kDisplayRgbOrder = true;
 constexpr double kDefaultRadarLat = 37.7552;
 constexpr double kDefaultRadarLon = -122.4528;
 
+// --- METAR flight-category map defaults (overridden via WiFi setup portal) ---
+// Center picked to match the geometric middle of the baked Bay Area airport
+// list; radius covers the full envelope with a small margin.
+constexpr float kDefaultMetarLat = 37.55f;
+constexpr float kDefaultMetarLon = -122.30f;
+constexpr float kDefaultMetarRadiusNm = 45.0f;
+
 /** Poll adsb.fi (API public limit: 1 req/s). */
 constexpr unsigned long kAdsbFetchIntervalMs = 3000;
 /** Legacy scale unused — fetch uses radar::fetchRadiusKm() to screen edge. */

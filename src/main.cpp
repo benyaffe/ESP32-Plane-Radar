@@ -9,6 +9,7 @@
 #include "hardware/display.h"
 #include "services/adsb_client.h"
 #include "services/focus_points.h"
+#include "services/metar_config.h"
 #include "services/radar_location.h"
 #include "services/wifi_setup.h"
 #include "ui/layer_style.h"
@@ -123,6 +124,7 @@ void setup() {
     statusScreenPortal();
   }
   services::location::init();
+  services::metar_config::init();
   ui::radar::rangeInit();
   services::focus::init();
   ui::layers::init();

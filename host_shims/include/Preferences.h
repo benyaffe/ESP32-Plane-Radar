@@ -47,6 +47,25 @@ class Preferences {
     return it == store().end() ? defaultValue : std::stod(it->second);
   }
 
+  size_t putFloat(const char* key, float v) {
+    store()[fullKey(key)] = std::to_string(v);
+    return sizeof(float);
+  }
+  float getFloat(const char* key, float defaultValue = 0.0f) {
+    auto it = store().find(fullKey(key));
+    return it == store().end() ? defaultValue : std::stof(it->second);
+  }
+
+  size_t putString(const char* key, const char* v) {
+    store()[fullKey(key)] = v ? v : "";
+    return store()[fullKey(key)].size();
+  }
+  std::string getString(const char* key, const char* defaultValue = "") {
+    auto it = store().find(fullKey(key));
+    return it == store().end() ? std::string(defaultValue ? defaultValue : "")
+                               : it->second;
+  }
+
  private:
   std::string fullKey(const char* key) const { return _ns + ":" + key; }
   static std::unordered_map<std::string, std::string>& store() {

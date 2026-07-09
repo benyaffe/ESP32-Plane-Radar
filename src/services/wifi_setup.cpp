@@ -14,6 +14,8 @@
 #endif
 
 #include "config.h"
+#include "services/focus_points.h"
+#include "services/metar_config.h"
 #include "services/radar_location.h"
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
@@ -68,13 +70,34 @@ void stopLanWebPortal();
 bool wifiLinkUp();
 
 constexpr int kCoordParamLen = 20;
+constexpr int kRadiusParamLen = 8;
+constexpr int kFocusJsonParamLen = 640;
 constexpr char kCoordInputAttrs[] =
     " type=\"number\" step=\"0.000001\"";
+constexpr char kRadiusInputAttrs[] =
+    " type=\"number\" step=\"0.1\" min=\"1\"";
+constexpr char kFocusJsonAttrs[] =
+    " maxlength=\"640\" placeholder='[{\"name\":\"SFO\",\"lat\":37.62,\"lon\":-122.38,\"range_idx\":1}]'";
 
-WiFiManagerParameter s_param_lat("radar_lat", "Latitude (deg)", "0",
+WiFiManagerParameter s_param_lat("radar_lat", "Home latitude (deg)", "0",
                                 kCoordParamLen, kCoordInputAttrs);
-WiFiManagerParameter s_param_lon("radar_lon", "Longitude (deg)", "0",
+WiFiManagerParameter s_param_lon("radar_lon", "Home longitude (deg)", "0",
                                 kCoordParamLen, kCoordInputAttrs);
+
+WiFiManagerParameter s_param_metar_lat("metar_lat",
+                                       "METAR map center latitude (deg)", "0",
+                                       kCoordParamLen, kCoordInputAttrs);
+WiFiManagerParameter s_param_metar_lon("metar_lon",
+                                       "METAR map center longitude (deg)", "0",
+                                       kCoordParamLen, kCoordInputAttrs);
+WiFiManagerParameter s_param_metar_radius("metar_rad",
+                                          "METAR map radius (nm)", "45",
+                                          kRadiusParamLen, kRadiusInputAttrs);
+
+WiFiManagerParameter s_param_focus_json(
+    "focus_ring",
+    "Focus airports (JSON: [{name,lat,lon,range_idx}, ...])", "",
+    kFocusJsonParamLen, kFocusJsonAttrs);
 
 char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
@@ -87,6 +110,23 @@ void refreshPortalParamDefaults() {
   snprintf(lon_buf, sizeof(lon_buf), "%.6f", services::location::lon());
   s_param_lat.setValue(lat_buf, kCoordParamLen);
   s_param_lon.setValue(lon_buf, kCoordParamLen);
+
+  char metar_lat_buf[kCoordParamLen + 1];
+  char metar_lon_buf[kCoordParamLen + 1];
+  char metar_rad_buf[kRadiusParamLen + 1];
+  snprintf(metar_lat_buf, sizeof(metar_lat_buf), "%.6f",
+           services::metar_config::centerLat());
+  snprintf(metar_lon_buf, sizeof(metar_lon_buf), "%.6f",
+           services::metar_config::centerLon());
+  snprintf(metar_rad_buf, sizeof(metar_rad_buf), "%.1f",
+           services::metar_config::radiusNm());
+  s_param_metar_lat.setValue(metar_lat_buf, kCoordParamLen);
+  s_param_metar_lon.setValue(metar_lon_buf, kCoordParamLen);
+  s_param_metar_radius.setValue(metar_rad_buf, kRadiusParamLen);
+
+  const String ring_json = services::focus::currentRingJson();
+  s_param_focus_json.setValue(ring_json.c_str(), kFocusJsonParamLen);
+
   snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs),
            "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
   s_param_runways.setValue("T", 2);
@@ -97,6 +137,10 @@ void onPortalParamsSaved() {
                                            s_param_lon.getValue())) {
     Serial.println("Invalid lat/lon in portal — keeping previous location");
   }
+  services::metar_config::saveFromStrings(s_param_metar_lat.getValue(),
+                                          s_param_metar_lon.getValue(),
+                                          s_param_metar_radius.getValue());
+  services::focus::saveRingJson(s_param_focus_json.getValue());
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 }
 
@@ -104,6 +148,10 @@ void attachPortalParams(WiFiManager& wm) {
   refreshPortalParamDefaults();
   wm.addParameter(&s_param_lat);
   wm.addParameter(&s_param_lon);
+  wm.addParameter(&s_param_metar_lat);
+  wm.addParameter(&s_param_metar_lon);
+  wm.addParameter(&s_param_metar_radius);
+  wm.addParameter(&s_param_focus_json);
   wm.addParameter(&s_param_runways);
   wm.setSaveParamsCallback(onPortalParamsSaved);
 }
