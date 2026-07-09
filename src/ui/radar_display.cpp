@@ -12,7 +12,7 @@
 #include "services/adsb_client.h"
 #include "services/radar_location.h"
 #include "services/focus_points.h"
-#include "ui/airspace_overlay.h"
+// #include "ui/airspace_overlay.h"  // disabled — distracting on the traffic view
 #include "ui/coastline_overlay.h"
 #include "ui/label_layout.h"
 #include "ui/land_overlay.h"
@@ -1266,10 +1266,12 @@ void drawStaticGrid(Gfx& gfx) {
   coastline::draw(gfx);
   // Roads on top of land + coastline; still under labels + aircraft.
   ui::roads::draw(gfx);
-  // FAA Class B/C/D polygon outlines — dashed, color-coded per class.
-  // Above roads so airspace edges over freeways still read; under labels
-  // + runways + aircraft.
-  ui::airspace::draw(gfx);
+  // FAA Class B/C/D airspace overlay disabled — it was cluttering the
+  // traffic view and isn't part of the desk-toy use case (we're
+  // spectating, not vectoring). Data + renderer intentionally kept in
+  // the tree (data/airspace.h, src/ui/airspace_overlay.*) in case a
+  // future view wants them; only the draw call is commented out.
+  // ui::airspace::draw(gfx);
   // Order matters: airport labels register bounding rects with labels::,
   // then the scale label dodges around them. (N/E/S/W cardinals were
   // removed — north is always up on a radar, so those pixels are wasted.)

@@ -22,19 +22,20 @@ namespace {
 // OurAirports (same source as the runway data). Order matters only for
 // dot draw order — no need to prioritize.
 Station s_stations[] = {
+    // Bay Area primaries within a ~45 nm envelope of home. KAPC (Napa) and
+    // KWVI (Watsonville) were dropped so the weather view can zoom tight
+    // enough for the Peninsula/East Bay cluster to read cleanly.
     {"KSFO", 37.6188f, -122.3750f, Category::Unknown, 0, 0, 0, INT32_MAX},
     {"KOAK", 37.7213f, -122.2214f, Category::Unknown, 0, 0, 0, INT32_MAX},
     {"KSJC", 37.3639f, -121.9289f, Category::Unknown, 0, 0, 0, INT32_MAX},
     {"KHWD", 37.6591f, -122.1214f, Category::Unknown, 0, 0, 0, INT32_MAX},
     {"KLVK", 37.6934f, -121.8203f, Category::Unknown, 0, 0, 0, INT32_MAX},
-    {"KAPC", 38.2131f, -122.2806f, Category::Unknown, 0, 0, 0, INT32_MAX},
     {"KCCR", 37.9897f, -122.0567f, Category::Unknown, 0, 0, 0, INT32_MAX},
     {"KHAF", 37.5136f, -122.5006f, Category::Unknown, 0, 0, 0, INT32_MAX},
     {"KSQL", 37.5119f, -122.2495f, Category::Unknown, 0, 0, 0, INT32_MAX},
     {"KPAO", 37.4611f, -122.1150f, Category::Unknown, 0, 0, 0, INT32_MAX},
     {"KRHV", 37.3329f, -121.8195f, Category::Unknown, 0, 0, 0, INT32_MAX},
     {"KNUQ", 37.4161f, -122.0492f, Category::Unknown, 0, 0, 0, INT32_MAX},
-    {"KWVI", 36.9356f, -121.7897f, Category::Unknown, 0, 0, 0, INT32_MAX},
 };
 constexpr size_t kStationCount = sizeof(s_stations) / sizeof(s_stations[0]);
 
