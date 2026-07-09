@@ -1,73 +1,39 @@
 // Plane Radar — web preview entry point.
-//
-// Skeleton right now: bootstraps the canvas, draws a placeholder ring so
-// something's on screen, wires the layer toggle chips. Aircraft +
-// coastline + weather etc. land in subsequent commits.
 
 import "./style.css";
-
-const CANVAS_SIZE = 240;
+import { loadMapData, type MapData } from "./data";
+import { renderFrame } from "./renderer";
+import { state, subscribe, cycleRange, toggleLayer, type LayerId } from "./state";
+import { makeTapDiscriminator } from "./input";
+import { mountTypeahead } from "./airports";
 
 interface LayerDef {
-  id: string;
+  id: LayerId;
   label: string;
-  defaultOn: boolean;
 }
 
 const LAYERS: LayerDef[] = [
-  { id: "coast", label: "Coast", defaultOn: true },
-  { id: "land", label: "Land", defaultOn: true },
-  { id: "roads", label: "Roads", defaultOn: true },
-  { id: "runways", label: "Runways", defaultOn: true },
-  { id: "tags", label: "Tags", defaultOn: true },
+  { id: "coast", label: "Coast" },
+  { id: "land", label: "Land" },
+  { id: "roads", label: "Roads" },
+  { id: "runways", label: "Runways" },
+  { id: "tags", label: "Tags" },
 ];
 
-const enabled = new Map<string, boolean>();
+let mapData: MapData | null = null;
 
-function mountLayers(root: HTMLElement) {
-  for (const l of LAYERS) {
-    enabled.set(l.id, l.defaultOn);
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = l.label;
-    btn.setAttribute("aria-pressed", String(l.defaultOn));
-    btn.addEventListener("click", () => {
-      const on = !enabled.get(l.id);
-      enabled.set(l.id, on);
-      btn.setAttribute("aria-pressed", String(on));
-      requestFrame();
-    });
-    root.appendChild(btn);
-  }
-}
-
-function drawPlaceholder(ctx: CanvasRenderingContext2D) {
-  ctx.fillStyle = "#04081c";
-  ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-  ctx.strokeStyle = "#1a5c2e";
-  ctx.lineWidth = 1;
-  const cx = CANVAS_SIZE / 2;
-  const cy = CANVAS_SIZE / 2;
-  for (const r of [27, 54, 81, 107]) {
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - 107);
-  ctx.lineTo(cx, cy + 107);
-  ctx.moveTo(cx - 107, cy);
-  ctx.lineTo(cx + 107, cy);
-  ctx.stroke();
-  ctx.fillStyle = "#7a86ad";
-  ctx.font = "10px system-ui";
+function drawLoadingState(ctx: CanvasRenderingContext2D, msg: string): void {
+  ctx.fillStyle = "rgb(4, 10, 28)";
+  ctx.fillRect(0, 0, 240, 240);
+  ctx.fillStyle = "rgb(122, 134, 173)";
+  ctx.font = "10px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("scaffolding — content lands soon", cx, cy);
+  ctx.fillText(msg, 120, 120);
 }
 
 let frameQueued = false;
-function requestFrame() {
+function requestFrame(): void {
   if (frameQueued) return;
   frameQueued = true;
   requestAnimationFrame(() => {
@@ -76,14 +42,102 @@ function requestFrame() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    drawPlaceholder(ctx);
+    if (mapData) {
+      renderFrame(ctx, mapData);
+    } else {
+      drawLoadingState(ctx, "loading map…");
+    }
   });
 }
 
-function init() {
+function mountLayerToggles(root: HTMLElement): void {
+  for (const l of LAYERS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = l.label;
+    btn.setAttribute("aria-pressed", String(state.layers[l.id]));
+    btn.addEventListener("click", () => {
+      const on = toggleLayer(l.id);
+      btn.setAttribute("aria-pressed", String(on));
+    });
+    root.appendChild(btn);
+  }
+}
+
+function mountCanvasGestures(canvas: HTMLCanvasElement): void {
+  const disc = makeTapDiscriminator((tap) => {
+    if (tap === "single") cycleRange();
+    else if (tap === "double") {
+      // Focus cycling isn't implemented yet — placeholder for now.
+      // On phase 2 this'll cycle through a small preset ring (SFO/OAK/...).
+    } else if (tap === "triple") {
+      // Weather view — implemented in a later commit.
+    }
+  });
+  canvas.addEventListener("click", () => disc.tap());
+  // Prevent iOS Safari's tap-highlight color from flashing on quick taps.
+  canvas.style.setProperty("-webkit-tap-highlight-color", "transparent");
+}
+
+function mountKeyboardShortcuts(): void {
+  window.addEventListener("keydown", (e) => {
+    if (e.target instanceof HTMLInputElement) return;  // don't hijack typing
+    if (e.key === " " || e.code === "Space") {
+      e.preventDefault();
+      // Space = same as canvas tap.
+      window.dispatchEvent(new CustomEvent("radar-tap"));
+    } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
+      const idx = Number(e.key) - 1;
+      const id = LAYERS[idx]?.id;
+      if (id) {
+        toggleLayer(id);
+        // Update the button aria-pressed state
+        const btns = document.querySelectorAll("#layer-toggles button");
+        const btn = btns[idx] as HTMLButtonElement | undefined;
+        if (btn) btn.setAttribute("aria-pressed", String(state.layers[id]));
+      }
+    }
+  });
+  const spaceDisc = makeTapDiscriminator((tap) => {
+    if (tap === "single") cycleRange();
+  });
+  window.addEventListener("radar-tap", () => spaceDisc.tap());
+}
+
+async function init(): Promise<void> {
+  requestFrame();  // "loading map…"
+
+  const canvas = document.getElementById("radar") as HTMLCanvasElement | null;
   const layerRoot = document.getElementById("layer-toggles");
-  if (layerRoot) mountLayers(layerRoot);
+  const search = document.getElementById("airport-search") as HTMLInputElement | null;
+  const results = document.getElementById("airport-results");
+
+  if (canvas) mountCanvasGestures(canvas);
+  if (layerRoot) mountLayerToggles(layerRoot);
+  mountKeyboardShortcuts();
+
+  subscribe(requestFrame);
+
+  try {
+    mapData = await loadMapData("data");
+  } catch (err) {
+    console.error(err);
+    const canvas = document.getElementById("radar") as HTMLCanvasElement | null;
+    const ctx = canvas?.getContext("2d");
+    if (ctx) drawLoadingState(ctx, "map load failed");
+    return;
+  }
+
   requestFrame();
+
+  if (search && results && mapData) {
+    mountTypeahead({
+      input: search,
+      results,
+      index: mapData.airportIndex,
+      onSelected: () => requestFrame(),
+    });
+  }
 }
 
 if (document.readyState === "loading") {
