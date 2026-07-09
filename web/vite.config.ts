@@ -1,7 +1,12 @@
 import { defineConfig } from "vite";
+import type { IncomingMessage, ServerResponse } from "http";
 
 // Static site — build outputs to web/dist/, which Cloudflare Pages serves.
 // Pages Functions in web/functions/ are picked up automatically.
+//
+// The dev-only middleware below emulates the Cloudflare Pages Function
+// at /api/adsb by fetching adsb.fi server-side (which bypasses the CORS
+// wall). In production the real Function takes over at the same path.
 export default defineConfig({
   base: "./",
   build: {
@@ -13,4 +18,41 @@ export default defineConfig({
     port: 5173,
     strictPort: false,
   },
+  plugins: [
+    {
+      name: "dev-adsb-proxy",
+      configureServer(server) {
+        server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+          if (!req.url?.startsWith("/api/adsb")) return next();
+          const url = new URL(req.url, "http://localhost");
+          const lat = parseFloat(url.searchParams.get("lat") ?? "");
+          const lon = parseFloat(url.searchParams.get("lon") ?? "");
+          const nm = parseFloat(url.searchParams.get("nm") ?? "25");
+          if (!isFinite(lat) || !isFinite(lon) || !isFinite(nm)) {
+            res.statusCode = 400;
+            res.setHeader("content-type", "application/json");
+            res.end(JSON.stringify({ error: "bad params" }));
+            return;
+          }
+          const upstream =
+            `https://opendata.adsb.fi/api/v3/lat/${lat.toFixed(4)}/` +
+            `lon/${lon.toFixed(4)}/dist/${nm.toFixed(1)}`;
+          try {
+            const upResp = await fetch(upstream, {
+              headers: { "User-Agent": "plane-radar-web-dev" },
+            });
+            const body = await upResp.text();
+            res.statusCode = upResp.status;
+            res.setHeader("content-type", "application/json");
+            res.setHeader("access-control-allow-origin", "*");
+            res.end(body);
+          } catch (err) {
+            res.statusCode = 502;
+            res.setHeader("content-type", "application/json");
+            res.end(JSON.stringify({ error: String(err) }));
+          }
+        });
+      },
+    },
+  ],
 });

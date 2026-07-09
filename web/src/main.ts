@@ -16,6 +16,8 @@ import { makeTapDiscriminator, type Tap } from "./input";
 import { mountTypeahead } from "./airports";
 import { drawWeatherView } from "./weatherView";
 import { refreshIfStale } from "./weather";
+import { fetchAircraft } from "./aircraft";
+import { RANGE_PRESETS } from "./theme";
 
 interface LayerDef {
   id: LayerId;
@@ -117,6 +119,26 @@ subscribe(() => {
   }
   requestFrame();
 });
+
+// Aircraft fetch loop. Fires immediately on center/range change plus
+// every 3 s while the radar view is active. Skipped in weather mode.
+let aircraftFetchInFlight = false;
+async function pollAircraft(): Promise<void> {
+  if (state.view !== "radar") return;
+  if (aircraftFetchInFlight) return;
+  aircraftFetchInFlight = true;
+  try {
+    // Fetch a slightly wider radius than the visible ring so a plane
+    // arriving from beyond the edge appears smoothly.
+    const nm = RANGE_PRESETS[state.rangeIdx].nm * 1.1;
+    await fetchAircraft(state.centerLat, state.centerLon, nm);
+    requestFrame();
+  } finally {
+    aircraftFetchInFlight = false;
+  }
+}
+subscribe(() => { void pollAircraft(); });
+setInterval(() => { void pollAircraft(); }, 3000);
 
 function mountCanvasGestures(canvas: HTMLCanvasElement): void {
   const disc = makeTapDiscriminator(handleGesture);

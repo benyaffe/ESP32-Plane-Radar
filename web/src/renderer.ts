@@ -12,6 +12,8 @@ import {
   SIZE,
 } from "./theme";
 import { state, currentOuterKm, currentRangeLabel } from "./state";
+import { aircraft } from "./aircraft";
+import { drawAircraft } from "./aircraftView";
 
 // ---------------------------------------------------------------------------
 // Layer drawing
@@ -196,6 +198,11 @@ export function renderFrame(ctx: CanvasRenderingContext2D, data: MapData): void 
   drawRunways(ctx, view, data);
   drawCenterDot(ctx);
   drawScaleLabel(ctx);
+
+  // Aircraft draw last so icons + tags sit above the map. The clip to
+  // the outer disc is opened again just for icons to keep them from
+  // drawing over the bezel margin (labels are OK past the ring).
+  drawAircraft(ctx, view, aircraft(), state.layers.tags);
 
   drawBezelMask(ctx);
 }
