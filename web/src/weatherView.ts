@@ -19,22 +19,57 @@ import { segmentOnScreen } from "./projection";
 const PROJECTION_PX = 108;
 const LABEL_MARGIN_PX = 14;
 
-// Per-station AABB used for label collision — mirrors weather_map.cpp.
-// Horizontal half-width is measured from the real label glyphs (varies
-// per ICAO); vertical extent covers the dot plus the stacked label.
-// Labels are wider than tall, so an isotropic min-sep pushes vertical
-// pairs too far while horizontal chains (PAO/NUQ/SJC) still crash.
+// Dots stay at their true projected positions — never nudged. Labels
+// are moved into free space around the dot (8 candidate slots), with a
+// leader line drawn whenever the label ends up somewhere other than
+// the default "below the dot" position. Mirrors weather_map.cpp.
 const DOT_RADIUS_PX = 4;
 const LABEL_HEIGHT_PX = 14;
-const LABEL_OFFSET_PX = 6;   // label top offset below dot center
-const FOOTPRINT_PAD_PX = 2;
-const STATION_HALF_H =
-  Math.round((DOT_RADIUS_PX + LABEL_OFFSET_PX + LABEL_HEIGHT_PX +
-              DOT_RADIUS_PX) / 2) + FOOTPRINT_PAD_PX;
+const LABEL_GAP_PX = 4;
+const DOT_BBOX_PAD_PX = 1;
 const LABEL_FONT = "bold 12px system-ui, sans-serif";
 
 function displayIcao(icao: string): string {
   return icao.startsWith("K") ? icao.slice(1) : icao;
+}
+
+interface Placement {
+  labelX: number;
+  labelY: number;
+  cand: number;
+}
+
+// 8 candidate offsets (top_center anchor of the label) relative to the
+// dot center. Ordered by preference — 0 is directly below (no leader),
+// then above, then the cardinals, then the diagonals.
+function candidateOffsets(halfW: number): { dx: number; dy: number }[] {
+  const dr = DOT_RADIUS_PX;
+  const gap = LABEL_GAP_PX;
+  const lh = LABEL_HEIGHT_PX;
+  const vdn = dr + gap;
+  const vup = -dr - gap - lh;
+  const hr = dr + gap + halfW;
+  const hl = -dr - gap - halfW;
+  const vmid = -Math.round(lh / 2);
+  return [
+    { dx: 0, dy: vdn },     // below (default, no leader)
+    { dx: 0, dy: vup },     // above
+    { dx: hr, dy: vmid },   // right
+    { dx: hl, dy: vmid },   // left
+    { dx: hr, dy: vdn },    // below-right
+    { dx: hl, dy: vdn },    // below-left
+    { dx: hr, dy: vup },    // above-right
+    { dx: hl, dy: vup },    // above-left
+  ];
+}
+
+function overlapArea(
+  ax1: number, ay1: number, ax2: number, ay2: number,
+  bx1: number, by1: number, bx2: number, by2: number,
+): number {
+  const w = Math.min(ax2, bx2) - Math.max(ax1, bx1);
+  const h = Math.min(ay2, by2) - Math.max(ay1, by1);
+  return w > 0 && h > 0 ? w * h : 0;
 }
 
 interface Fit {
@@ -74,50 +109,101 @@ function project(fit: Fit, lat: number, lon: number): [number, number] {
   ];
 }
 
-// Iterative relaxation on axis-aligned dot+label footprints. Pushes
-// each overlapping pair along the axis of minimum penetration so
-// vertical pairs (OAK/HWD) get a small y-nudge while horizontal chains
-// (PAO/NUQ/SJC) get a bigger x-nudge. ctx must already have LABEL_FONT
-// applied so measureText matches what drawStations() renders.
-function placeStations(
+// Project every station to its true screen pixel and measure the
+// label's real rendered width. Dots don't move — only labels.
+function projectStations(
   ctx: CanvasRenderingContext2D,
   fit: Fit,
-): [number, number][] {
-  const positions = STATIONS.map((s) => project(fit, s.lat, s.lon));
-  const halfW = STATIONS.map((s) => {
-    const w = ctx.measureText(displayIcao(s.icao)).width;
-    return Math.max(DOT_RADIUS_PX, Math.round(w / 2)) + FOOTPRINT_PAD_PX;
+): { dots: [number, number][]; halfW: number[] } {
+  const dots = STATIONS.map((s) => project(fit, s.lat, s.lon));
+  const halfW = STATIONS.map(
+    (s) => Math.round(ctx.measureText(displayIcao(s.icao)).width / 2) + 1,
+  );
+  return { dots, halfW };
+}
+
+// Assign each station's label to the least-overlapping candidate slot
+// among 8 positions around the dot. Iterate a few passes so late-placed
+// labels can push earlier ones off their first choice.
+function placeLabels(
+  dots: [number, number][],
+  halfW: number[],
+): Placement[] {
+  const n = dots.length;
+  const places: Placement[] = dots.map(([x, y], i) => {
+    const off = candidateOffsets(halfW[i])[0];
+    return { labelX: x + off.dx, labelY: y + off.dy, cand: 0 };
   });
-  // 8 passes: axis-aware pushes converge more slowly when a station is
-  // boxed in on two sides, but 8 still costs nothing for 11 stations.
-  for (let pass = 0; pass < 8; pass++) {
-    let moved = false;
-    for (let i = 0; i < positions.length; i++) {
-      for (let j = i + 1; j < positions.length; j++) {
-        const dx = positions[j][0] - positions[i][0];
-        const dy = positions[j][1] - positions[i][1];
-        const needX = halfW[i] + halfW[j];
-        const needY = 2 * STATION_HALF_H;
-        const ox = needX - Math.abs(dx);
-        const oy = needY - Math.abs(dy);
-        if (ox <= 0 || oy <= 0) continue;
-        if (ox <= oy) {
-          const sign = dx >= 0 ? 1 : -1;
-          const push = Math.ceil(ox / 2);
-          positions[i][0] -= sign * push;
-          positions[j][0] += sign * push;
-        } else {
-          const sign = dy >= 0 ? 1 : -1;
-          const push = Math.ceil(oy / 2);
-          positions[i][1] -= sign * push;
-          positions[j][1] += sign * push;
-        }
-        moved = true;
+  const scoreLabel = (i: number, cand: number): number => {
+    const off = candidateOffsets(halfW[i])[cand];
+    const lx = dots[i][0] + off.dx;
+    const ly = dots[i][1] + off.dy;
+    const L = lx - halfW[i];
+    const R = lx + halfW[i];
+    const T = ly;
+    const B = ly + LABEL_HEIGHT_PX;
+    let s = 0;
+    for (let j = 0; j < n; j++) {
+      if (j === i) continue;
+      const [dx, dy] = dots[j];
+      s += overlapArea(
+        L, T, R, B,
+        dx - DOT_RADIUS_PX - DOT_BBOX_PAD_PX,
+        dy - DOT_RADIUS_PX - DOT_BBOX_PAD_PX,
+        dx + DOT_RADIUS_PX + DOT_BBOX_PAD_PX,
+        dy + DOT_RADIUS_PX + DOT_BBOX_PAD_PX,
+      );
+      s += overlapArea(
+        L, T, R, B,
+        places[j].labelX - halfW[j], places[j].labelY,
+        places[j].labelX + halfW[j], places[j].labelY + LABEL_HEIGHT_PX,
+      );
+    }
+    return s;
+  };
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false;
+    for (let i = 0; i < n; i++) {
+      let bestCand = places[i].cand;
+      let bestScore = scoreLabel(i, bestCand);
+      for (let c = 0; c < 8; c++) {
+        if (c === bestCand) continue;
+        const s = scoreLabel(i, c);
+        // Strict '<' so ties keep the lower-index candidate (defaults win).
+        if (s < bestScore) { bestScore = s; bestCand = c; }
+      }
+      if (bestCand !== places[i].cand) {
+        const off = candidateOffsets(halfW[i])[bestCand];
+        places[i] = {
+          labelX: dots[i][0] + off.dx,
+          labelY: dots[i][1] + off.dy,
+          cand: bestCand,
+        };
+        changed = true;
       }
     }
-    if (!moved) break;
+    if (!changed) break;
   }
-  return positions;
+  return places;
+}
+
+// Endpoint of the leader on the label side: where the ray from the dot
+// to the label center crosses the label bbox.
+function leaderEndpoint(
+  dotX: number, dotY: number,
+  labelX: number, labelY: number,
+  halfW: number,
+): [number, number] {
+  const cx = labelX;
+  const cy = labelY + LABEL_HEIGHT_PX / 2;
+  const hh = LABEL_HEIGHT_PX / 2;
+  const dx = dotX - cx;
+  const dy = dotY - cy;
+  if (dx === 0 && dy === 0) return [cx, cy];
+  const tx = dx === 0 ? Infinity : halfW / Math.abs(dx);
+  const ty = dy === 0 ? Infinity : hh / Math.abs(dy);
+  const t = Math.min(tx, ty);
+  return [Math.round(cx + t * dx), Math.round(cy + t * dy)];
 }
 
 function categoryColor(c: Category): string {
@@ -185,10 +271,29 @@ function drawFreshness(ctx: CanvasRenderingContext2D): void {
 
 function drawStations(
   ctx: CanvasRenderingContext2D,
-  positions: [number, number][],
+  dots: [number, number][],
+  halfW: number[],
+  places: Placement[],
 ): void {
+  // Pass 1: leaders under everything else.
+  ctx.strokeStyle = "rgb(90, 130, 110)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
   for (let i = 0; i < STATIONS.length; i++) {
-    const [x, y] = positions[i];
+    const [dx, dy] = dots[i];
+    if (!insideDisc(dx, dy)) continue;
+    if (places[i].cand === 0) continue;
+    const [ex, ey] = leaderEndpoint(
+      dx, dy, places[i].labelX, places[i].labelY, halfW[i],
+    );
+    ctx.moveTo(dx, dy);
+    ctx.lineTo(ex, ey);
+  }
+  ctx.stroke();
+
+  // Pass 2: dots + labels.
+  for (let i = 0; i < STATIONS.length; i++) {
+    const [x, y] = dots[i];
     if (!insideDisc(x, y)) continue;
     const s = STATIONS[i];
     ctx.fillStyle = categoryColor(s.category);
@@ -199,7 +304,7 @@ function drawStations(
     ctx.lineWidth = 1;
     ctx.stroke();
     ctx.fillStyle = COLORS.label;
-    ctx.fillText(displayIcao(s.icao), x, y + LABEL_OFFSET_PX);
+    ctx.fillText(displayIcao(s.icao), places[i].labelX, places[i].labelY);
   }
 }
 
@@ -216,12 +321,13 @@ export function drawWeatherView(
   data: MapData,
 ): void {
   const fit = computeFit();
-  // Set label font once — placeStations measures glyphs with it and
+  // Set label font once — projectStations measures glyphs with it and
   // drawStations paints with it. Keeps the two paths from drifting.
   ctx.font = LABEL_FONT;
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  const positions = placeStations(ctx, fit);
+  const { dots, halfW } = projectStations(ctx, fit);
+  const places = placeLabels(dots, halfW);
   ctx.fillStyle = COLORS.background;
   ctx.fillRect(0, 0, SIZE, SIZE);
   drawLand(ctx, fit, data);
@@ -230,6 +336,6 @@ export function drawWeatherView(
   ctx.font = LABEL_FONT;   // drawFreshness stomps the font
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  drawStations(ctx, positions);
+  drawStations(ctx, dots, halfW, places);
   drawBezelMask(ctx);
 }

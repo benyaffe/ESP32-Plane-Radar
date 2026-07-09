@@ -31,31 +31,61 @@ float s_center_lat = 0.0f;
 float s_center_lon = 0.0f;
 float s_px_per_km  = 1.0f;
 
-// Post-projection screen positions, after collision-nudge. Sized to a
-// generous cap because the fixed weather station list never approaches
-// this. Filled by placeStations() before draw.
+// Dots stay at their true projected positions — never nudged. Labels
+// are moved into free space around the dot (8 candidate slots), with a
+// leader line drawn whenever the label ends up somewhere other than
+// the default "below the dot" position.
 constexpr size_t kMaxStations = 32;
 int s_sx[kMaxStations] = {0};
 int s_sy[kMaxStations] = {0};
-int s_half_w[kMaxStations] = {0};  // measured from the real label glyphs
+int s_half_w[kMaxStations] = {0};
 
-// Per-station AABB used for label collision. Horizontal half-width is
-// measured from the actual rendered label (varies per ICAO — 'W' is
-// nearly 2× 'I'). Vertical extent covers the dot on top plus the label
-// stacked below. Labels are wider than tall, so an isotropic min-sep
-// pushes vertical pairs too far while horizontal pairs (PAO/NUQ/SJC)
-// still crash.
-constexpr int kDotRadiusPx    = 4;
-constexpr int kLabelHeightPx  = 14;
-constexpr int kLabelOffsetPx  = 8;   // label baseline offset below dot center
-constexpr int kFootprintPadPx = 2;
+constexpr int kDotRadiusPx   = 4;
+constexpr int kLabelHeightPx = 14;
+constexpr int kLabelGapPx    = 4;   // space between dot edge and label edge
+constexpr int kDotBboxPadPx  = 1;
 
-constexpr int kStationHalfH =
-    (kDotRadiusPx + kLabelOffsetPx + kLabelHeightPx + kDotRadiusPx) / 2 +
-    kFootprintPadPx;
+// Label placement: cand=0 is the default (below the dot, no leader).
+// Any other slot gets a thin leader line back to the dot.
+struct Placement {
+  int label_x, label_y;   // top_center anchor passed to drawString
+  int cand;
+};
+Placement s_place[kMaxStations] = {};
 
 const char* displayIcao(const char* icao) {
   return (icao[0] == 'K' && icao[1]) ? icao + 1 : icao;
+}
+
+// 8 candidate offsets (top_center anchor of the label) relative to the
+// dot center. Ordered by preference — 0 is directly below (no leader),
+// then above, then the four cardinals with the label vertically
+// centered on the dot, then the four diagonals.
+struct CandOffset { int dx, dy; };
+void computeCandidates(int halfW, CandOffset out[8]) {
+  const int dr = kDotRadiusPx;
+  const int gap = kLabelGapPx;
+  const int lh = kLabelHeightPx;
+  const int vdn = dr + gap;               // label top: below dot
+  const int vup = -dr - gap - lh;         // label top: above dot
+  const int hr  = dr + gap + halfW;       // label center-x: right of dot
+  const int hl  = -dr - gap - halfW;      // label center-x: left of dot
+  const int vmid = -lh / 2;               // label top: vertically centered on dot
+  out[0] = {0,   vdn};   // below (default, no leader)
+  out[1] = {0,   vup};   // above
+  out[2] = {hr,  vmid};  // right
+  out[3] = {hl,  vmid};  // left
+  out[4] = {hr,  vdn};   // below-right
+  out[5] = {hl,  vdn};   // below-left
+  out[6] = {hr,  vup};   // above-right
+  out[7] = {hl,  vup};   // above-left
+}
+
+int overlapArea(int ax1, int ay1, int ax2, int ay2,
+                int bx1, int by1, int bx2, int by2) {
+  const int w = std::min(ax2, bx2) - std::max(ax1, bx1);
+  const int h = std::min(ay2, by2) - std::max(ay1, by1);
+  return (w > 0 && h > 0) ? w * h : 0;
 }
 
 void computeFit() {
@@ -167,51 +197,102 @@ void drawCoast(lgfx::LGFXBase& gfx) {
   }
 }
 
-// Project every station, measure its rendered label width, then relax
-// overlapping pairs so their AABBs (dot + label) don't touch. Push each
-// pair along the axis of *minimum penetration* — labels are wider than
-// tall, so a vertical pair (OAK above HWD) needs only a small nudge
-// while a horizontal chain (PAO/NUQ/SJC) needs a bigger one. gfx must
-// already have the display font loaded and text size set to what
-// drawStations() will render, since we measure via textWidth().
-void placeStations(lgfx::LGFXBase& gfx) {
+// Project every station to its true screen pixel and measure the
+// label's real rendered width. Dots don't move from here — only labels.
+// gfx must already have the display font loaded and text size set to
+// what drawStations() will render, since we measure via textWidth().
+void projectStations(lgfx::LGFXBase& gfx) {
   const services::weather::Station* stations = services::weather::stations();
   const size_t n = services::weather::stationCount();
   for (size_t i = 0; i < n && i < kMaxStations; ++i) {
     projectLatLon(stations[i].lat, stations[i].lon, &s_sx[i], &s_sy[i]);
-    const int label_w = gfx.textWidth(displayIcao(stations[i].icao));
-    s_half_w[i] = std::max(kDotRadiusPx, label_w / 2) + kFootprintPadPx;
+    const int lw = gfx.textWidth(displayIcao(stations[i].icao));
+    s_half_w[i] = lw / 2 + 1;   // 1 px pad so touching bboxes count as overlap
   }
-  // 8 passes: axis-aware pushes converge more slowly than isotropic ones
-  // when a station is boxed in on two sides, but 8 still costs nothing
-  // for 11 stations.
-  for (int pass = 0; pass < 8; ++pass) {
-    bool moved = false;
+}
+
+// Overlap of a candidate label bbox against every OTHER station's dot
+// and currently-placed label. Lower is better; 0 is a clean slot.
+int labelScore(size_t i, int cand, size_t n) {
+  CandOffset offs[8];
+  computeCandidates(s_half_w[i], offs);
+  const int lx = s_sx[i] + offs[cand].dx;
+  const int ly = s_sy[i] + offs[cand].dy;
+  const int L = lx - s_half_w[i];
+  const int R = lx + s_half_w[i];
+  const int T = ly;
+  const int B = ly + kLabelHeightPx;
+  int score = 0;
+  for (size_t j = 0; j < n && j < kMaxStations; ++j) {
+    if (j == i) continue;
+    const int DL = s_sx[j] - kDotRadiusPx - kDotBboxPadPx;
+    const int DT = s_sy[j] - kDotRadiusPx - kDotBboxPadPx;
+    const int DRt = s_sx[j] + kDotRadiusPx + kDotBboxPadPx;
+    const int DB = s_sy[j] + kDotRadiusPx + kDotBboxPadPx;
+    score += overlapArea(L, T, R, B, DL, DT, DRt, DB);
+    const int LL = s_place[j].label_x - s_half_w[j];
+    const int LR = s_place[j].label_x + s_half_w[j];
+    const int LT = s_place[j].label_y;
+    const int LB = s_place[j].label_y + kLabelHeightPx;
+    score += overlapArea(L, T, R, B, LL, LT, LR, LB);
+  }
+  return score;
+}
+
+// Assign each station's label to the least-overlapping candidate slot.
+// Iterate a handful of passes so late-placed labels can push earlier
+// ones off their first choice.
+void placeLabels() {
+  const size_t n = services::weather::stationCount();
+  for (size_t i = 0; i < n && i < kMaxStations; ++i) {
+    CandOffset offs[8];
+    computeCandidates(s_half_w[i], offs);
+    s_place[i].cand    = 0;
+    s_place[i].label_x = s_sx[i] + offs[0].dx;
+    s_place[i].label_y = s_sy[i] + offs[0].dy;
+  }
+  for (int pass = 0; pass < 4; ++pass) {
+    bool changed = false;
     for (size_t i = 0; i < n && i < kMaxStations; ++i) {
-      for (size_t j = i + 1; j < n && j < kMaxStations; ++j) {
-        const int dx = s_sx[j] - s_sx[i];
-        const int dy = s_sy[j] - s_sy[i];
-        const int need_x = s_half_w[i] + s_half_w[j];
-        const int need_y = 2 * kStationHalfH;
-        const int ox = need_x - std::abs(dx);
-        const int oy = need_y - std::abs(dy);
-        if (ox <= 0 || oy <= 0) continue;
-        if (ox <= oy) {
-          const int sign = (dx >= 0) ? 1 : -1;
-          const int push = (ox + 1) / 2;
-          s_sx[i] -= sign * push;
-          s_sx[j] += sign * push;
-        } else {
-          const int sign = (dy >= 0) ? 1 : -1;
-          const int push = (oy + 1) / 2;
-          s_sy[i] -= sign * push;
-          s_sy[j] += sign * push;
-        }
-        moved = true;
+      int best_cand  = s_place[i].cand;
+      int best_score = labelScore(i, best_cand, n);
+      for (int c = 0; c < 8; ++c) {
+        if (c == best_cand) continue;
+        const int s = labelScore(i, c, n);
+        // Strict '<' so ties keep the lower-index candidate (defaults win).
+        if (s < best_score) { best_score = s; best_cand = c; }
+      }
+      if (best_cand != s_place[i].cand) {
+        CandOffset offs[8];
+        computeCandidates(s_half_w[i], offs);
+        s_place[i].cand    = best_cand;
+        s_place[i].label_x = s_sx[i] + offs[best_cand].dx;
+        s_place[i].label_y = s_sy[i] + offs[best_cand].dy;
+        changed = true;
       }
     }
-    if (!moved) break;
+    if (!changed) break;
   }
+}
+
+// Endpoint of the leader on the label side: the point where the ray
+// from the dot to the label center crosses the label bbox. Gives a
+// clean, un-crossing leader terminus.
+void leaderEndpoint(int dot_x, int dot_y, int label_x, int label_y,
+                    int half_w, int* out_x, int* out_y) {
+  const int cx = label_x;
+  const int cy = label_y + kLabelHeightPx / 2;
+  const int hh = kLabelHeightPx / 2;
+  const int dx = dot_x - cx;
+  const int dy = dot_y - cy;
+  if (dx == 0 && dy == 0) { *out_x = cx; *out_y = cy; return; }
+  const float tx = (dx == 0) ? 1e9f
+                             : static_cast<float>(half_w) / std::abs(dx);
+  const float ty = (dy == 0) ? 1e9f
+                             : static_cast<float>(hh) / std::abs(dy);
+  const float t = std::min(tx, ty);
+  *out_x = cx + static_cast<int>(std::lroundf(t * dx));
+  *out_y = cy + static_cast<int>(std::lroundf(t * dy));
 }
 
 // Configures gfx with the label font/size that both placeStations() (for
@@ -226,18 +307,34 @@ void configureLabelFont(lgfx::LGFXBase& gfx) {
 void drawStations(lgfx::LGFXBase& gfx) {
   const services::weather::Station* stations = services::weather::stations();
   const size_t n = services::weather::stationCount();
+  // Bright enough to be seen against the dark navy bg without competing
+  // with the label glyphs. Matched to the coastline greenish-teal so the
+  // leaders read as map furniture, not as a data channel.
+  const uint16_t leader_color = tft.color565(90, 130, 110);
 
+  // Pass 1: leaders first so dots/labels paint on top of the lines.
+  for (size_t i = 0; i < n && i < kMaxStations; ++i) {
+    if (!insideDisc(s_sx[i], s_sy[i])) continue;
+    if (s_place[i].cand == 0) continue;
+    int ex, ey;
+    leaderEndpoint(s_sx[i], s_sy[i], s_place[i].label_x, s_place[i].label_y,
+                   s_half_w[i], &ex, &ey);
+    gfx.drawLine(s_sx[i], s_sy[i], ex, ey, leader_color);
+  }
+
+  // Pass 2: dots + labels.
   for (size_t i = 0; i < n && i < kMaxStations; ++i) {
     const int sx = s_sx[i];
     const int sy = s_sy[i];
     if (!insideDisc(sx, sy)) continue;
 
     const uint16_t color = categoryColor(stations[i].category);
-    gfx.fillCircle(sx, sy, 4, color);
-    gfx.drawCircle(sx, sy, 4, radar::kColorBackground);  // subtle outline
+    gfx.fillCircle(sx, sy, kDotRadiusPx, color);
+    gfx.drawCircle(sx, sy, kDotRadiusPx, radar::kColorBackground);
 
     gfx.setTextColor(radar::kColorLabel, radar::kColorBackground);
-    gfx.drawString(displayIcao(stations[i].icao), sx, sy + 8);
+    gfx.drawString(displayIcao(stations[i].icao),
+                   s_place[i].label_x, s_place[i].label_y);
   }
 }
 
@@ -280,8 +377,9 @@ void draw() {
   lgfx::LGFXBase& gfx = sp ? static_cast<lgfx::LGFXBase&>(*sp)
                            : static_cast<lgfx::LGFXBase&>(tft);
   computeFit();
-  configureLabelFont(gfx);   // must be set before placeStations() measures
-  placeStations(gfx);
+  configureLabelFont(gfx);   // must be set before textWidth measurement
+  projectStations(gfx);
+  placeLabels();
   gfx.fillScreen(radar::kColorBackground);
   drawLand(gfx);
   drawCoast(gfx);

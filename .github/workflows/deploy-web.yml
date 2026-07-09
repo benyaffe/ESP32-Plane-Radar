@@ -1,0 +1,54 @@
+# Build the web preview and deploy to Netlify on push.
+#
+# Netlify site 'plane-radar-yaf' is not linked to this repo via the
+# Netlify GitHub App, so pushes don't auto-build. This workflow fills
+# that gap: build the Vite site under web/ and push the dist folder up
+# through the Netlify CLI. Manual `netlify deploy --prod` still works if
+# you need to ship without a push.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   NETLIFY_AUTH_TOKEN  — personal access token from
+#                          https://app.netlify.com/user/applications#personal-access-tokens
+# The site ID is safe to embed (visible in every deploy URL).
+name: Deploy web
+
+on:
+  push:
+    branches: [sdl-emulator, main]
+    paths:
+      - "web/**"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Deploy to Netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: 92df9535-be52-4c0e-8644-2534076b362d
+        run: |
+          npx --yes netlify-cli@26 deploy \
+            --prod \
+            --dir dist \
+            --message "GH Actions: ${{ github.sha }}"
