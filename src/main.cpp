@@ -10,6 +10,7 @@
 #include "services/adsb_client.h"
 #include "services/focus_points.h"
 #include "services/metar_config.h"
+#include "services/ota_update.h"
 #include "services/outdoor_temp.h"
 #include "services/radar_location.h"
 #include "services/wifi_setup.h"
@@ -157,6 +158,7 @@ void setup() {
 void loop() {
   handleBootButton();
   wifiLoop();
+  services::ota::loop();
 
   if (WiFi.status() != WL_CONNECTED) {
     if (g_radar_visible) {

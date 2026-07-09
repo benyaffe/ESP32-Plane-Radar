@@ -16,6 +16,7 @@
 #include "config.h"
 #include "services/focus_points.h"
 #include "services/metar_config.h"
+#include "services/ota_update.h"
 #include "services/radar_location.h"
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
@@ -124,6 +125,11 @@ WiFiManagerParameter s_param_focus_json(
 WiFiManagerParameter s_param_tz("clock_tz", "Time zone (POSIX TZ)",
                                 kDefaultTz, kTzParamLen);
 
+constexpr int kHostnameParamLen = 32;
+WiFiManagerParameter s_param_hostname(
+    "ota_host", "mDNS hostname (OTA + web portal)",
+    config::kPortalHostname, kHostnameParamLen);
+
 char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
                                      s_runways_checkbox_attrs, WFM_LABEL_AFTER);
@@ -155,6 +161,15 @@ void refreshPortalParamDefaults() {
   const String tz = loadStoredTz();
   s_param_tz.setValue(tz.c_str(), kTzParamLen);
 
+  Preferences prefs;
+  String hostname = config::kPortalHostname;
+  if (prefs.begin(kWifiPrefsNamespace, true)) {
+    hostname = prefs.getString("ota_host", config::kPortalHostname);
+    prefs.end();
+    if (hostname.length() == 0) hostname = config::kPortalHostname;
+  }
+  s_param_hostname.setValue(hostname.c_str(), kHostnameParamLen);
+
   snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs),
            "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
   s_param_runways.setValue("T", 2);
@@ -179,6 +194,7 @@ void onPortalParamsSaved() {
       configTzTime(tz, "pool.ntp.org", "time.nist.gov");
     }
   }
+  services::ota::setHostname(s_param_hostname.getValue());
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 }
 
@@ -191,6 +207,7 @@ void attachPortalParams(WiFiManager& wm) {
   wm.addParameter(&s_param_metar_radius);
   wm.addParameter(&s_param_focus_json);
   wm.addParameter(&s_param_tz);
+  wm.addParameter(&s_param_hostname);
   wm.addParameter(&s_param_runways);
   wm.setSaveParamsCallback(onPortalParamsSaved);
 }
