@@ -1,0 +1,68 @@
+# Rebuild the global map-data tile pyramid once a month.
+#
+# Downloads Natural Earth 10m + OurAirports snapshots at the moment
+# the action runs, feeds them through scripts/build_tiles.py, and
+# commits the refreshed tiles under web/public/data/tiles/ to the
+# branch. The subsequent push triggers deploy-web.yml which uploads
+# them to Netlify — no additional infra needed.
+#
+# web/public/data/tiles/ is in .gitignore so a contributor's local
+# bake never sneaks into an unrelated commit; this workflow uses
+# `git add -f` to override.
+#
+# Fetch cadence matches the plan: once a month is plenty for
+# coastlines / airports and won't strain the source hosts.
+name: Build tiles
+
+on:
+  schedule:
+    # 1st of the month at 08:23 UTC. Off the :00 minute so all GH
+    # scheduled tasks from every repo in the fleet aren't hammering
+    # at once.
+    - cron: "23 8 1 * *"
+  workflow_dispatch:
+
+concurrency:
+  group: build-tiles-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bake tiles
+        run: |
+          python scripts/build_tiles.py
+          echo "--- tile pyramid summary ---"
+          find web/public/data/tiles -name '*.bin' | wc -l
+          du -sh web/public/data/tiles
+
+      - name: Commit refreshed tiles
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # -f because .gitignore excludes web/public/data/tiles/ — the
+          # workflow is the sanctioned way to update those files.
+          git add -f web/public/data/tiles
+          if git diff --cached --quiet; then
+            echo "no tile changes — skipping commit"
+            exit 0
+          fi
+          git commit -m "Tiles: monthly rebuild from Natural Earth + OurAirports
+
+          Automated refresh triggered by the build-tiles workflow.
+          Sources fetched at commit time:
+            - Natural Earth 1:10m coastline / land / minor_islands / lakes
+            - OurAirports airports.csv + runways.csv
+            - data/instrument_approach_airports.txt (in-repo FAA seed list)
+          "
+          git push
