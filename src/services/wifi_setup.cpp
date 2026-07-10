@@ -18,6 +18,7 @@
 #include "services/metar_config.h"
 #include "services/ota_update.h"
 #include "services/radar_location.h"
+#include "services/tap_sensor.h"
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
 
@@ -481,6 +482,18 @@ bool bootButtonConsumeTap() {
 // removed when the app collapsed to a two-gesture ring (single = adjust
 // current screen, double = advance to next).
 BootTap bootButtonConsumeEvent() {
+  // Accelerometer path first: the ADXL345 already discriminated single
+  // vs double in hardware, so we skip the software window entirely and
+  // return the event the moment tap_sensor::poll() latched it. Prefer
+  // Double over Single if both are pending in the same tick (shouldn't
+  // happen in practice — poll() suppresses SingleTap when DoubleTap
+  // fires — but be defensive).
+  if (services::tap_sensor::consumeDoubleTap()) return BootTap::Double;
+  if (services::tap_sensor::consumeSingleTap()) return BootTap::Single;
+
+  // BOOT-button path: count taps in a 250 ms window. Kept as a fallback
+  // for developers who open the case, or for hardware without the
+  // accelerometer wired in.
   constexpr unsigned long kMultiTapWindowMs = 250;
   static uint8_t s_pending_count = 0;
   static unsigned long s_last_tap_ms = 0;

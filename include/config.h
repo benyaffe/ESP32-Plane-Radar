@@ -36,6 +36,12 @@ constexpr unsigned long kBootTapMinMs = 40UL;
 constexpr int kBmeSdaPin = 6;
 constexpr int kBmeSclPin = 7;
 
+// --- Optional ADXL345 knock-the-case tap sensor (I²C, address 0x53) ---
+// Shares the I²C bus with the BME280 (different address). Wire SDO to
+// GND for 0x53; VCC/GND to 3V3/GND; SDA/SCL to the pins above. Leave
+// unconnected if only the BOOT button is used for input.
+constexpr uint8_t kTapSensorI2cAddress = 0x53;
+
 // --- Display: GC9A01 1.28" round 240×240 (SPI) ---
 constexpr gpio_num_t kDisplayPinRst = GPIO_NUM_0;
 constexpr gpio_num_t kDisplayPinCs = GPIO_NUM_1;

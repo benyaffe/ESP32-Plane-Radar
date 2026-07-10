@@ -13,6 +13,7 @@
 #include "services/ota_update.h"
 #include "services/outdoor_temp.h"
 #include "services/radar_location.h"
+#include "services/tap_sensor.h"
 #include "services/tile_cache.h"
 #include "services/tile_fetch.h"
 #include "services/wifi_setup.h"
@@ -162,6 +163,9 @@ void setup() {
   g_ring_index = services::focus::currentIndex();
   ui::layers::init();
   ui::cockpit::init();
+  // Optional case-tap accelerometer. Silent no-op if the chip isn't
+  // wired; BOOT-button gestures continue to work.
+  services::tap_sensor::init();
   services::adsb::setPollFn(wifiLoop);
 
   if (wifiSetupConnect()) {
@@ -170,6 +174,9 @@ void setup() {
 }
 
 void loop() {
+  // Poll the tap sensor before dispatching, so any knock latched since
+  // the last tick is visible to bootButtonConsumeEvent().
+  services::tap_sensor::poll();
   handleBootButton();
   wifiLoop();
   services::ota::loop();
