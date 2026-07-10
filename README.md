@@ -19,8 +19,7 @@ Firmware for an **ESP32-C3 Super Mini** and a **1.28″ round GC9A01** display (
 > - **Map overlays** — coastline, land tint, major highways, and large-airport runways baked into flash from Natural Earth + OurAirports.
 > - **Aircraft data blocks** — 2-line tags with callsign + altitude in hundreds of feet, rank-limited by a per-range clarity budget so wide views stay readable.
 > - **Nautical miles** as the display unit (aviation convention).
-> - **FAA Class B/C/D airspace** — real polygon data baked from the FAA's public GeoJSON. Rendered as dashed class-colored rings; currently off by default in the traffic view, on in the code for future modes.
-> - **Layer toggles** — every overlay individually flips on/off via `1`–`7` keys in the emulator or buttons on the web.
+> - **Layer toggles** — every overlay individually flips on/off via `1`–`6` keys in the emulator or buttons on the web.
 >
 > Upstream README continues below, unmodified.
 >

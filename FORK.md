@@ -35,15 +35,7 @@ Any hub with a large-airport ICAO gets rendered runways + label.
 - **`scripts/build_focus_airports.py`** — a separate table for the smaller GA fields (SQL/HAF/PAO/HWD) so they render *only when they're the current focus*, keeping the general view uncluttered.
 - **`src/ui/runway_overlay.cpp`** — templated draw routines so the same code renders either data set.
 
-## 4. FAA Class B/C/D airspace polygons
-
-Real GPS-defined polygon shapes from the FAA — not the wedding-cake circle approximation you often see.
-
-- **`scripts/build_airspace.py`** — fetches the FAA ArcGIS Hub Class Airspace layer (~580 MB GeoJSON, cached under `.local-data/`), filters to CLASS ∈ {B, C, D} in the Bay Area bbox, DP-simplifies each shelf, emits `src/data/airspace_data.cpp`. Result: 50 polygons, 1156 points — SFO's Class B alone has 11 stacked altitude tiers.
-- **`src/ui/airspace_overlay.cpp`** — draws every-other polygon edge (dashed style), color-coded by class (B = blue, C = magenta, D = teal).
-- **Currently off by default** in the traffic view (found to be more clutter than value for desk-toy spectator use); the draw call is commented out in `src/ui/radar_display.cpp` with the data + renderer intentionally kept in-tree for possible future modes.
-
-## 5. Aircraft data blocks (tags)
+## 4. Aircraft data blocks (tags)
 
 Callsign + altitude labels next to each icon, with the same style choices ATC uses on approach scopes.
 
@@ -83,7 +75,7 @@ A second view mode showing Bay Area airports as VFR/MVFR/IFR/LIFR colored dots.
 
 Every overlay individually on/off, persisted to Preferences.
 
-- **`include/ui/layer_style.h`** + **`src/ui/layer_style.cpp`** — small registry: `enum class Layer { Coastline, Land, Roads, Airspace, RunwaysLarge, RunwaysFocus, AircraftTags }`.
+- **`include/ui/layer_style.h`** + **`src/ui/layer_style.cpp`** — small registry: `enum class Layer { Coastline, Land, Roads, RunwaysLarge, RunwaysFocus, AircraftTags }`.
 - **Keyboard bindings on native** — keys `1`–`7` flip the corresponding layer, `S` snaps a screenshot.
 
 ## 10. Web preview (`web/`)
@@ -124,7 +116,7 @@ Firmware and SDL share source (only host stubs differ under `USE_NATIVE`); the w
 - **The SDL emulator is source of truth for what "looks right."** It's the daily-driver during development and its pixels are what the firmware actually shows on a real panel (with the same BGR-swap chain applied).
 - **Colors** — sample from an actual emulator PPM screenshot, not from the C++ constants. `include/ui/radar_theme.h` names colors by their *logical* aviation meaning (e.g. `kAircraftR=255` = "red"), but the panel's BGR order flips channels at display time. What ships on screen is `color565(kAircraftB, kAircraftG, kAircraftR)`, not the raw RGB. Web must mirror the *rendered* pixels, not the logical constants.
 - **Placement math + timing** — every animation offset (e.g. tag alt/type flip lagging fetches by 1.5 s), every slot ring (16-slot tag placement), every clip-to-disc gate — implement in the emulator first, port to web second. Never the other way around.
-- **Data** — geometric baked data (coastlines, land triangles, roads, airports, airspace) comes from the same source files (Natural Earth, OurAirports, FAA, TIGER, OSM) via `scripts/build_*.py`. Firmware bakes to `.cpp`; web bakes to `.json`. Same DP tolerances where practical.
+- **Data** — geometric baked data (coastlines, land triangles, roads, airports) comes from the same source files (Natural Earth, OurAirports, TIGER, OSM) via `scripts/build_*.py`. Firmware bakes to `.cpp`; web bakes to `.json`. Same DP tolerances where practical.
 - **Feature adds** — new radar behaviour lands in `src/ui/*.cpp` first, gets pixel-sampled from the SDL emulator, then ported to `web/src/*.ts`. Any web-only additions (weather map, airport typeahead, dynamic map data) don't need a firmware counterpart.
 
 If a divergence bug lands (web looks different from emulator), the fix is *always* to make the web match the emulator, never the reverse.

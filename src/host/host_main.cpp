@@ -123,10 +123,9 @@ constexpr KeyBinding kLayerKeys[] = {
     {SDLK_1, 20, ui::layers::Layer::Coastline},
     {SDLK_2, 21, ui::layers::Layer::Land},
     {SDLK_3, 22, ui::layers::Layer::Roads},
-    {SDLK_4, 23, ui::layers::Layer::Airspace},
-    {SDLK_5, 24, ui::layers::Layer::RunwaysLarge},
-    {SDLK_6, 25, ui::layers::Layer::RunwaysFocus},
-    {SDLK_7, 26, ui::layers::Layer::AircraftTags},
+    {SDLK_4, 24, ui::layers::Layer::RunwaysLarge},
+    {SDLK_5, 25, ui::layers::Layer::RunwaysFocus},
+    {SDLK_6, 26, ui::layers::Layer::AircraftTags},
 };
 
 bool consumeLayerKey(const KeyBinding& kb) {
@@ -147,7 +146,7 @@ void setup() {
       "           Radar → METAR weather → Cockpit → Radar\n"
       "           (any tap on a non-radar screen returns to radar)\n"
       "  S      : save screenshot\n"
-      "  1..7   : toggle layer (coastline / land / roads / airspace /\n"
+      "  1..6   : toggle layer (coastline / land / roads /\n"
       "           runways-large / runways-focus / aircraft-tags)\n");
   bootButtonInit();
   lgfx::v1::gpio_hi(kShotFakeGpio);

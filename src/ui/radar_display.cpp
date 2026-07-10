@@ -12,7 +12,6 @@
 #include "services/adsb_client.h"
 #include "services/radar_location.h"
 #include "services/focus_points.h"
-// #include "ui/airspace_overlay.h"  // disabled — distracting on the traffic view
 #include "ui/coastline_overlay.h"
 #include "ui/label_layout.h"
 #include "ui/land_overlay.h"
@@ -39,9 +38,6 @@ uint16_t kColorRunwayLabel = 0x7DFF;
 uint16_t kColorLand = 0x0824;  // ~RGB(12, 20, 36) after color565 init
 uint16_t kColorEmergency = 0xF800;  // pure red
 uint16_t kColorRoad = 0x39C7;  // ~RGB(60, 60, 70) after color565 init
-uint16_t kColorAirspaceB = 0x5B7B;  // ~RGB(90,150,220) after color565 init
-uint16_t kColorAirspaceC = 0xCB77;  // ~RGB(200,110,190)
-uint16_t kColorAirspaceD = 0x6E75;  // ~RGB(110,200,170)
 
 }  // namespace radar
 
@@ -219,11 +215,6 @@ void initPalette() {
 #endif
   radar::kColorRoad =
       tft.color565(radar::kRoadR, radar::kRoadG, radar::kRoadB);
-  // Airspace outlines — SDL takes plain RGB, no swap needed (like roads
-  // and coastline, which are drawn without kDisplayRgbOrder gating).
-  radar::kColorAirspaceB = tft.color565( 90, 150, 220);
-  radar::kColorAirspaceC = tft.color565(200, 110, 190);
-  radar::kColorAirspaceD = tft.color565(110, 200, 170);
 }
 
 constexpr float kKmPerDeg = 111.0f;
@@ -1258,12 +1249,6 @@ void drawStaticGrid(Gfx& gfx) {
   coastline::draw(gfx);
   // Roads on top of land + coastline; still under labels + aircraft.
   ui::roads::draw(gfx);
-  // FAA Class B/C/D airspace overlay disabled — it was cluttering the
-  // traffic view and isn't part of the desk-toy use case (we're
-  // spectating, not vectoring). Data + renderer intentionally kept in
-  // the tree (data/airspace.h, src/ui/airspace_overlay.*) in case a
-  // future view wants them; only the draw call is commented out.
-  // ui::airspace::draw(gfx);
   // Order matters: airport labels register bounding rects with labels::,
   // then the scale label dodges around them. (N/E/S/W cardinals were
   // removed — north is always up on a radar, so those pixels are wasted.)
