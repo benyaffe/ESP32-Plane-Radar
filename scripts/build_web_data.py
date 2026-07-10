@@ -1,156 +1,43 @@
 #!/usr/bin/env python3
-"""Bake JSON data files for the web preview.
+"""Bake the airport typeahead index the web preview loads at boot.
 
-Reads the same public-domain sources as the firmware bakes (Natural
-Earth 1:10m + OurAirports) and emits JSON that the browser can fetch()
-without a proxy. Files:
+Everything the website used to fetch here — coastlines, land, rivers,
+lakes, water polygons, per-airport runways — now comes from the same
+tile pyramid the firmware fetches (see scripts/build_tiles.py). This
+script only produces the one file that isn't naturally per-tile:
 
-  web/public/data/coastline.json   [[[lon, lat], ...], ...]
-  web/public/data/land.json        {vertices: [[lon, lat], ...],
-                                    triangles: [[i, j, k], ...]}
-  web/public/data/roads.json       [{type, points: [[lon, lat], ...]}, ...]
-  web/public/data/airports.json    {"KSFO": {name, lat, lon, city, tier,
-                                             runways: [{le, he, lat1, lon1,
-                                                        lat2, lon2}, ...]},
-                                    ...}
   web/public/data/airport_index.json  compact typeahead payload for all
                                        recognizable US airports:
                                        [[icao, iata, city, name, lat, lon],
                                         ...]
 
-Phase 1: geometric layers clipped to a 200 km bbox around a chosen
-center (default: home). Phase 2 will replace those with CONUS-wide
-data + client-side clipping — the JSON schemas above are already
-compatible with that.
-
-Usage:
-  scripts/build_web_data.py                        # SF default
-  scripts/build_web_data.py --center 40.6,-73.7    # NYC
+Source is OurAirports (same CSV the tile bake uses for per-tile
+airports); this script just widens the filter to "any recognizable
+airport globally" so the Settings picker can find one anywhere.
 """
 from __future__ import annotations
 
-import argparse
 import csv
 import io
 import json
-import math
 import sys
 import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CACHE_DIR = ROOT / ".local-data"
 OUT_DIR = ROOT / "web" / "public" / "data"
 
-DEFAULT_CENTER_LAT = 37.7552
-DEFAULT_CENTER_LON = -122.4528
-DEFAULT_RADIUS_KM = 200.0
-KM_PER_DEG = 111.0
-
-def ne_url(res: str, layer: str) -> str:
-    return (
-        "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/"
-        f"geojson/ne_{res}_{layer}.geojson"
-    )
-
-
-COASTLINE_URL = ne_url("10m", "coastline")
-LAND_URL = ne_url("10m", "land")
-MINOR_ISLANDS_URL = ne_url("10m", "minor_islands")
-ROADS_URL = ne_url("10m", "roads")
 AIRPORTS_URL = (
     "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/"
     "airports.csv"
 )
-RUNWAYS_URL = (
-    "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/"
-    "runways.csv"
-)
 
-LAKES_URL = ne_url("10m", "lakes")
-RIVERS_URL = ne_url("10m", "rivers_lake_centerlines")
-
-# OSM-derived coastline data, pre-processed by osmdata.openstreetmap.de
-# into a global WGS84 shapefile. Much higher fidelity than Natural
-# Earth (which caps at ~10 m per continent but only records ~50 total
-# points of Manhattan). We download the ~1 GB zip once, cache the
-# extracted shapefile under .local-data, and clip in build_coastline_osm().
-OSM_COASTLINE_URL = "https://osmdata.openstreetmap.de/download/coastlines-split-4326.zip"
-OSM_COASTLINE_ZIP = CACHE_DIR / "coastlines-split-4326.zip"
-OSM_COASTLINE_DIR = CACHE_DIR / "coastlines-split-4326"
-OSM_COASTLINE_SHP = OSM_COASTLINE_DIR / "lines"  # base path (pyshp adds .shp)
-
-# TIGER/Line — US Census Bureau's primary roads shapefile. Public
-# domain. Covers Interstates + US Highways + State Routes across the
-# whole US in one ~38 MB shapefile. RTTYP field distinguishes: I =
-# Interstate, U = US Highway, S = State Route, M/O/C = other.
-TIGER_ROADS_URL = "https://www2.census.gov/geo/tiger/TIGER2024/PRIMARYROADS/tl_2024_us_primaryroads.zip"
-TIGER_ROADS_ZIP = CACHE_DIR / "tl_2024_us_primaryroads.zip"
-TIGER_ROADS_DIR = CACHE_DIR / "tl_2024_us_primaryroads"
-TIGER_ROADS_SHP = TIGER_ROADS_DIR / "tl_2024_us_primaryroads"
-
-# OSM ocean water polygons (tidal — includes Hudson River, Chesapeake
-# Bay tidal branches, Delaware River lower, San Francisco Bay etc.).
-# Ships as raw polygon outlines; the browser Canvas fill() handles
-# rendering. We skip Python ear-clipping because it's O(n²) and chokes
-# on 10k+ point ocean polygons.
-OSM_WATER_URL = "https://osmdata.openstreetmap.de/download/water-polygons-split-4326.zip"
-OSM_WATER_ZIP = CACHE_DIR / "water-polygons-split-4326.zip"
-OSM_WATER_DIR = CACHE_DIR / "water-polygons-split-4326"
-OSM_WATER_SHP = OSM_WATER_DIR / "water_polygons"
-
-CACHE_MAP = {
-    "coastline": (COASTLINE_URL, CACHE_DIR / "ne_10m_coastline.geojson"),
-    "land": (LAND_URL, CACHE_DIR / "ne_10m_land.geojson"),
-    "islands": (MINOR_ISLANDS_URL, CACHE_DIR / "ne_10m_minor_islands.geojson"),
-    "roads": (ROADS_URL, CACHE_DIR / "ne_10m_roads.geojson"),
-    "lakes": (LAKES_URL, CACHE_DIR / "ne_10m_lakes.geojson"),
-    "rivers": (RIVERS_URL, CACHE_DIR / "ne_10m_rivers_lake_centerlines.geojson"),
+# OurAirports type → visual tier. Higher = more prominent on the map.
+AIRPORT_TIER = {
+    "large_airport": 3,
+    "medium_airport": 2,
+    "small_airport": 1,
 }
-
-
-def build_rivers(bbox, tol_deg=0.002):
-    """Rivers as centerlines — Natural Earth 10 m includes Hudson,
-    Mississippi, Missouri, Colorado, etc. OSM `natural=coastline`
-    treats non-tidal rivers as inland (not coastline), so these show
-    up as lines rather than water polygons on the coast dataset. Same
-    format as build_coastline() output."""
-    path = cached(*CACHE_MAP["rivers"])
-    if path is None:
-        return []
-    data = json.loads(path.read_text())
-    out = []
-    for feat in data.get("features", []):
-        geom = feat.get("geometry") or {}
-        gtype = geom.get("type")
-        raw = geom.get("coordinates") or []
-        if gtype == "LineString": chunks = [raw]
-        elif gtype == "MultiLineString": chunks = raw
-        else: continue
-        for coords in chunks:
-            for clipped in clip_polyline(coords, bbox):
-                simplified = dp_simplify(clipped, tol_deg)
-                if len(simplified) >= 2:
-                    out.append([round_pt(p) for p in simplified])
-    return out
-
-
-def cached(url: str, path: Path) -> Path | None:
-    """Download url → path if missing. Returns the path, or None if the
-    upstream 404'd (e.g. Natural Earth 50m has no minor_islands / roads
-    layers)."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        return path
-    print(f"downloading {url}", file=sys.stderr)
-    try:
-        urllib.request.urlretrieve(url, path)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            print(f"  not available (404), skipping", file=sys.stderr)
-            return None
-        raise
-    return path
 
 
 def fetch_csv(url: str) -> list[dict[str, str]]:
@@ -160,535 +47,29 @@ def fetch_csv(url: str) -> list[dict[str, str]]:
     return list(csv.DictReader(io.StringIO(text)))
 
 
-def _perp_dist(p, a, b):
-    ax, ay = a
-    bx, by = b
-    px, py = p
-    den = math.hypot(by - ay, bx - ax)
-    if den == 0:
-        return math.hypot(px - ax, py - ay)
-    num = abs((by - ay) * px - (bx - ax) * py + bx * ay - by * ax)
-    return num / den
-
-
-def dp_simplify(points, tol):
-    if len(points) < 3:
-        return list(points)
-    keep = [False] * len(points)
-    keep[0] = True
-    keep[-1] = True
-    stack = [(0, len(points) - 1)]
-    while stack:
-        lo, hi = stack.pop()
-        if hi - lo < 2:
-            continue
-        dmax = 0.0
-        idx = -1
-        for i in range(lo + 1, hi):
-            d = _perp_dist(points[i], points[lo], points[hi])
-            if d > dmax:
-                dmax = d
-                idx = i
-        if dmax > tol and idx >= 0:
-            keep[idx] = True
-            stack.append((lo, idx))
-            stack.append((idx, hi))
-    return [p for p, k in zip(points, keep) if k]
-
-
-def bbox_from_center(lat: float, lon: float, radius_km: float):
-    lat_margin = radius_km / KM_PER_DEG
-    lon_margin = radius_km / (KM_PER_DEG * math.cos(math.radians(lat)))
-    return (
-        lat - lat_margin,
-        lat + lat_margin,
-        lon - lon_margin,
-        lon + lon_margin,
-    )
-
-
-def in_bbox(lon: float, lat: float, bbox) -> bool:
-    return bbox[0] <= lat <= bbox[1] and bbox[2] <= lon <= bbox[3]
-
-
-def clip_polyline(coords, bbox):
-    """Same as the firmware: emit sub-polylines when the line exits bbox."""
-    out = []
-    current = []
-    for pt in coords:
-        lon, lat = pt[0], pt[1]
-        if in_bbox(lon, lat, bbox):
-            current.append((lon, lat))
-        elif len(current) >= 2:
-            out.append(current)
-            current = []
-        else:
-            current = []
-    if len(current) >= 2:
-        out.append(current)
-    return out
-
-
-def round_pt(p, decimals=5):
-    return [round(p[0], decimals), round(p[1], decimals)]
-
-
-# ---------------------------------------------------------------------------
-# Coastline
-# ---------------------------------------------------------------------------
-
-
-def _ensure_osm_coastline() -> Path | None:
-    """Download + unzip the ~1 GB OSM coastline shapefile bundle once
-    and cache it under .local-data/. Returns the shapefile base path
-    (without extension) that pyshp expects, or None if pyshp isn't
-    installed."""
-    try:
-        import shapefile  # noqa: F401  (pyshp)
-    except ImportError:
-        print("pyshp not installed — falling back to Natural Earth for coastline.\n"
-              "  pip install --break-system-packages pyshp",
-              file=sys.stderr)
-        return None
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not OSM_COASTLINE_SHP.with_suffix(".shp").exists():
-        if not OSM_COASTLINE_ZIP.exists():
-            print(f"downloading {OSM_COASTLINE_URL} (~900 MB, one-time)",
-                  file=sys.stderr)
-            urllib.request.urlretrieve(OSM_COASTLINE_URL, OSM_COASTLINE_ZIP)
-        print("unzipping OSM coastline bundle", file=sys.stderr)
-        import zipfile
-        with zipfile.ZipFile(OSM_COASTLINE_ZIP) as z:
-            z.extractall(CACHE_DIR)
-    return OSM_COASTLINE_SHP
-
-
-def build_coastline_osm(bbox, tol_deg):
-    """Higher-fidelity coastline from pre-processed OSM data. Falls back
-    to build_coastline() (Natural Earth) if pyshp isn't installed."""
-    base = _ensure_osm_coastline()
-    if base is None:
-        return build_coastline(bbox, tol_deg=tol_deg)
-    import shapefile  # noqa
-    r = shapefile.Reader(str(base))
-    out = []
-    for i in range(len(r)):
-        sh = r.shape(i)
-        lonmin, latmin, lonmax, latmax = sh.bbox
-        if latmax < bbox[0] or latmin > bbox[1]: continue
-        if lonmax < bbox[2] or lonmin > bbox[3]: continue
-        pts = list(sh.points)
-        simplified = dp_simplify(pts, tol_deg)
-        if len(simplified) >= 2:
-            out.append([round_pt(p) for p in simplified])
-    r.close()
-    return out
-
-
-def _ensure_osm_water() -> Path | None:
-    """Download + unzip OSM ocean water polygons (~900 MB one-time).
-    Returns the pyshp base path or None if pyshp isn't installed."""
-    try:
-        import shapefile  # noqa
-    except ImportError:
-        return None
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not OSM_WATER_SHP.with_suffix(".shp").exists():
-        if not OSM_WATER_ZIP.exists():
-            print(f"downloading {OSM_WATER_URL} (~900 MB, one-time)", file=sys.stderr)
-            urllib.request.urlretrieve(OSM_WATER_URL, OSM_WATER_ZIP)
-        print("unzipping OSM water polygons bundle", file=sys.stderr)
-        import zipfile
-        with zipfile.ZipFile(OSM_WATER_ZIP) as z:
-            z.extractall(CACHE_DIR)
-    return OSM_WATER_SHP
-
-
-def build_water_osm(bbox, tol_deg):
-    """OSM ocean/tidal water as raw polygon outlines — Hudson River,
-    Chesapeake Bay tributaries, SF Bay etc. Emitted as list-of-rings
-    (no triangulation) so the client Canvas fill() draws them natively;
-    Python ear-clip on 10 k+ point polygons was blowing past a 10-min
-    timeout. Skipped if pyshp isn't installed (returns empty)."""
-    base = _ensure_osm_water()
-    if base is None:
-        return []
-    import shapefile  # noqa
-    r = shapefile.Reader(str(base))
-    out = []
-    for i in range(len(r)):
-        sh = r.shape(i)
-        lonmin, latmin, lonmax, latmax = sh.bbox
-        if latmax < bbox[0] or latmin > bbox[1]: continue
-        if lonmax < bbox[2] or lonmin > bbox[3]: continue
-        pts = list(sh.points)
-        if len(pts) < 3: continue
-        s = dp_simplify(pts, tol_deg)
-        if len(s) < 3: continue
-        out.append([round_pt(p) for p in s])
-    r.close()
-    return out
-
-
-def _ensure_tiger_roads() -> Path | None:
-    """Download + unzip TIGER primary roads shapefile (~38 MB). Returns
-    the pyshp base path or None if pyshp isn't installed."""
-    try:
-        import shapefile  # noqa
-    except ImportError:
-        return None
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not TIGER_ROADS_SHP.with_suffix(".shp").exists():
-        if not TIGER_ROADS_ZIP.exists():
-            print(f"downloading {TIGER_ROADS_URL} (~38 MB)", file=sys.stderr)
-            urllib.request.urlretrieve(TIGER_ROADS_URL, TIGER_ROADS_ZIP)
-        print("unzipping TIGER roads bundle", file=sys.stderr)
-        import zipfile
-        with zipfile.ZipFile(TIGER_ROADS_ZIP) as z:
-            z.extractall(TIGER_ROADS_DIR)
-    return TIGER_ROADS_SHP
-
-
-def build_roads_tiger(bbox, tol_deg):
-    """CONUS-wide primary roads (Interstates + US Highways + State
-    Routes) from US Census TIGER/Line. Emits the same schema as
-    build_roads(): [{type, points}, …]. Route type is picked from
-    RTTYP so the renderer can weight them differently later:
-      I = Interstate, U = US Highway, S = State Route, M/O/C = other."""
-    base = _ensure_tiger_roads()
-    if base is None:
-        return []
-    import shapefile  # noqa
-    r = shapefile.Reader(str(base))
-    # Human-readable type labels.
-    TYPE = {"I": "Interstate", "U": "US Highway", "S": "State Route",
-            "M": "Common Name", "O": "Other", "C": "County"}
-    out = []
-    for i in range(len(r)):
-        sh = r.shape(i)
-        lonmin, latmin, lonmax, latmax = sh.bbox
-        if latmax < bbox[0] or latmin > bbox[1]: continue
-        if lonmax < bbox[2] or lonmin > bbox[3]: continue
-        pts = list(sh.points)
-        simplified = dp_simplify(pts, tol_deg)
-        if len(simplified) < 2:
-            continue
-        rec = r.record(i)
-        rttyp = (rec["RTTYP"] or "").strip()
-        out.append({
-            "type": TYPE.get(rttyp, "Other"),
-            "points": [round_pt(p) for p in simplified],
-        })
-    r.close()
-    return out
-
-
-def build_coastline(bbox, tol_deg=0.002):
-    path = cached(*CACHE_MAP["coastline"])
-    if path is None:
-        return []
-    data = json.loads(path.read_text())
-    out = []
-    for feat in data.get("features", []):
-        geom = feat.get("geometry") or {}
-        gtype = geom.get("type")
-        raw = geom.get("coordinates") or []
-        if gtype == "LineString":
-            chunks = [raw]
-        elif gtype == "MultiLineString":
-            chunks = raw
-        else:
-            continue
-        for coords in chunks:
-            for clipped in clip_polyline(coords, bbox):
-                simplified = dp_simplify(clipped, tol_deg)
-                if len(simplified) >= 2:
-                    out.append([round_pt(p) for p in simplified])
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Land — polygons converted to a shared vertex+triangle buffer via ear-clip
-# ---------------------------------------------------------------------------
-
-
-def _sign(p1, p2, p3):
-    return (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1])
-
-
-def _in_tri(p, a, b, c):
-    d1 = _sign(p, a, b)
-    d2 = _sign(p, b, c)
-    d3 = _sign(p, c, a)
-    has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
-    has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
-    return not (has_neg and has_pos)
-
-
-def _polygon_area(poly):
-    n = len(poly)
-    s = 0.0
-    for i in range(n):
-        x1, y1 = poly[i]
-        x2, y2 = poly[(i + 1) % n]
-        s += (x2 - x1) * (y2 + y1)
-    return s
-
-
-def ear_clip(polygon):
-    """Basic ear-clipping for a simple polygon (no holes). Returns list of
-    (a, b, c) index triples into the input polygon list."""
-    poly = list(polygon)
-    if len(poly) < 3:
-        return []
-    # Ensure CCW (positive signed area = CW in screen coords; for our
-    # (lon, lat) we want CCW = positive area under standard math orientation).
-    if _polygon_area(poly) < 0:
-        poly = list(reversed(poly))
-        was_reversed = True
-    else:
-        was_reversed = False
-    idx = list(range(len(poly)))
-    triangles = []
-    guard = 0
-    while len(idx) > 3:
-        guard += 1
-        if guard > 20000:
-            break  # runaway safety
-        ear_found = False
-        n = len(idx)
-        for i in range(n):
-            i_prev = idx[(i - 1) % n]
-            i_curr = idx[i]
-            i_next = idx[(i + 1) % n]
-            a, b, c = poly[i_prev], poly[i_curr], poly[i_next]
-            if _sign(a, b, c) <= 0:
-                continue  # reflex
-            contains = False
-            for j in idx:
-                if j in (i_prev, i_curr, i_next):
-                    continue
-                if _in_tri(poly[j], a, b, c):
-                    contains = True
-                    break
-            if not contains:
-                triangles.append((i_prev, i_curr, i_next))
-                idx.pop(i)
-                ear_found = True
-                break
-        if not ear_found:
-            break
-    if len(idx) == 3:
-        triangles.append((idx[0], idx[1], idx[2]))
-    if was_reversed:
-        n = len(poly)
-        triangles = [(n - 1 - a, n - 1 - c, n - 1 - b) for (a, b, c) in triangles]
-    return triangles
-
-
-def _polygon_bbox_overlap(poly, bbox):
-    min_lat = min(p[1] for p in poly)
-    max_lat = max(p[1] for p in poly)
-    min_lon = min(p[0] for p in poly)
-    max_lon = max(p[0] for p in poly)
-    if max_lat < bbox[0] or min_lat > bbox[1]:
-        return False
-    if max_lon < bbox[2] or min_lon > bbox[3]:
-        return False
-    return True
-
-
-def build_land(bbox, tol_deg=0.003, layer_keys=("land", "islands")):
-    vertices = []  # global (lon, lat) list
-    triangles = []  # (v0, v1, v2) indices
-    for key in layer_keys:
-        path = cached(*CACHE_MAP[key])
-        if path is None:
-            continue
-        data = json.loads(path.read_text())
-        for feat in data.get("features", []):
-            geom = feat.get("geometry") or {}
-            gtype = geom.get("type")
-            raw = geom.get("coordinates") or []
-            if gtype == "Polygon":
-                polys = [raw]
-            elif gtype == "MultiPolygon":
-                polys = raw
-            else:
-                continue
-            for poly in polys:
-                if not poly:
-                    continue
-                outer = [(p[0], p[1]) for p in poly[0]]
-                if not _polygon_bbox_overlap(outer, bbox):
-                    continue
-                simplified = dp_simplify(outer, tol_deg)
-                if len(simplified) < 3:
-                    continue
-                # Dedupe closing vertex if present
-                if simplified[0] == simplified[-1]:
-                    simplified = simplified[:-1]
-                base = len(vertices)
-                for p in simplified:
-                    vertices.append(round_pt(p))
-                tris = ear_clip(simplified)
-                for (a, b, c) in tris:
-                    triangles.append([base + a, base + b, base + c])
-    return {"vertices": vertices, "triangles": triangles}
-
-
-# ---------------------------------------------------------------------------
-# Roads — polylines with type
-# ---------------------------------------------------------------------------
-
-
-def build_roads(bbox, tol_deg=0.002, keep_types=("Major Highway", "Secondary Highway")):
-    path = cached(*CACHE_MAP["roads"])
-    if path is None:
-        return []
-    data = json.loads(path.read_text())
-    keep = set(keep_types)
-    out = []
-    for feat in data.get("features", []):
-        props = feat.get("properties") or {}
-        road_type = props.get("type")
-        if road_type not in keep:
-            continue
-        geom = feat.get("geometry") or {}
-        gtype = geom.get("type")
-        raw = geom.get("coordinates") or []
-        if gtype == "LineString":
-            chunks = [raw]
-        elif gtype == "MultiLineString":
-            chunks = raw
-        else:
-            continue
-        for coords in chunks:
-            for clipped in clip_polyline(coords, bbox):
-                simplified = dp_simplify(clipped, tol_deg)
-                if len(simplified) >= 2:
-                    out.append({
-                        "type": road_type,
-                        "points": [round_pt(p) for p in simplified],
-                    })
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Airports — full US index for typeahead + detail (runways) for airports
-# in the current region.
-# ---------------------------------------------------------------------------
-
-
-AIRPORT_TIER = {
-    "large_airport": 3,
-    "medium_airport": 2,
-    "small_airport": 1,
-}
-
-# Small airports we force-include for the Bay Area focus ring (they
-# won't otherwise pass the "scheduled service" filter). Extend if the
-# firmware's focus ring changes.
-FORCE_INCLUDE_ICAO = {"KHAF", "KHWD", "KSQL", "KPAO", "KNUQ", "KRHV", "KCCR", "KLVK", "KAPC"}
-
-
-def _is_h_designator(s: str) -> bool:
-    if not s or s[0] != "H":
-        return False
-    rest = s[1:]
-    return not rest or rest[0] in "-_" or rest.isdigit()
-
-
-def _is_helipad(row) -> bool:
-    le = (row.get("le_ident") or "").strip().upper()
-    he = (row.get("he_ident") or "").strip().upper()
-    if not _is_h_designator(le) and not _is_h_designator(he):
-        return False
-    try:
-        length_ft = int(row.get("length_ft") or 0)
-    except ValueError:
-        length_ft = 0
-    if _is_h_designator(le) and _is_h_designator(he):
-        return True
-    return length_ft < 2500
-
-
-def build_airports(bbox):
+def build_airport_index() -> list[list[object]]:
     airports = fetch_csv(AIRPORTS_URL)
-    runways = fetch_csv(RUNWAYS_URL)
-
-    # Group runways by airport ICAO
-    rw_by_apt = {}
-    for r in runways:
-        if _is_helipad(r):
-            continue
-        ident = (r.get("airport_ident") or "").strip()
-        try:
-            lat1 = float(r["le_latitude_deg"])
-            lon1 = float(r["le_longitude_deg"])
-            lat2 = float(r["he_latitude_deg"])
-            lon2 = float(r["he_longitude_deg"])
-        except (KeyError, ValueError, TypeError):
-            continue
-        rw_by_apt.setdefault(ident, []).append({
-            "le": (r.get("le_ident") or "").strip(),
-            "he": (r.get("he_ident") or "").strip(),
-            "lat1": round(lat1, 5), "lon1": round(lon1, 5),
-            "lat2": round(lat2, 5), "lon2": round(lon2, 5),
-        })
-
-    # Detailed airports (bbox arg is IGNORED for this table; we ship all
-    # US airports so any typeahead pick has runway data). This makes the
-    # payload larger but keeps behaviour uniform when the center moves
-    # from Bay Area to, say, Miami.
-    detailed = {}
-    for a in airports:
-        atype = a.get("type", "")
-        # Skip smallest untowered strips — they're mostly private
-        # farmland fields with no scheduled service; not useful for a
-        # spectator preview.
-        tier = AIRPORT_TIER.get(atype, 0)
-        ident = (a.get("ident") or "").strip()
-        if len(ident) != 4 or ident[0] != "K":
-            continue  # CONUS scope (K-prefixed ICAOs)
-        force = ident in FORCE_INCLUDE_ICAO
-        keep = force or tier >= 2 or (tier == 1 and a.get("scheduled_service") == "yes")
-        if not keep:
-            continue
-        try:
-            lat = float(a["latitude_deg"])
-            lon = float(a["longitude_deg"])
-        except (KeyError, ValueError, TypeError):
-            continue
-        detailed[ident] = {
-            "name": a.get("name", ""),
-            "city": a.get("municipality", ""),
-            "lat": round(lat, 5),
-            "lon": round(lon, 5),
-            "tier": tier,
-            "runways": rw_by_apt.get(ident, []),
-        }
-    _ = bbox  # accepted for symmetry, no longer used
-
-    # Global US typeahead index: all recognizable airports
-    index = []
+    index: list[list[object]] = []
     for a in airports:
         atype = a.get("type", "")
         tier = AIRPORT_TIER.get(atype, 0)
-        # Keep large + medium; small only if scheduled service.
+        # Keep large + medium + small-with-scheduled-service. This keeps
+        # the payload compact (~65 KB gzipped) while still covering every
+        # airport a spectator might actually recognize.
         keep = tier >= 2 or (tier == 1 and a.get("scheduled_service") == "yes")
         if not keep:
             continue
         ident = (a.get("ident") or "").strip()
-        if len(ident) != 4 or ident[0] != "K":
+        # 4-letter ICAO codes only — skip pseudo-idents like private
+        # strips with numeric identifiers that would clutter the picker.
+        if len(ident) != 4:
             continue
-        iata = (a.get("iata_code") or "").strip()
         try:
             lat = float(a["latitude_deg"])
             lon = float(a["longitude_deg"])
         except (KeyError, ValueError, TypeError):
             continue
-        # Tuple form keeps the file compact.
+        iata = (a.get("iata_code") or "").strip()
         index.append([
             ident,
             iata,
@@ -697,123 +78,26 @@ def build_airports(bbox):
             round(lat, 5),
             round(lon, 5),
         ])
-    # Sort by tier desc then by ICAO, so most recognizable airports rank first.
-    tier_lookup = {a["ident"]: AIRPORT_TIER.get(a["type"], 0) for a in airports}
-    index.sort(key=lambda row: (-tier_lookup.get(row[0], 0), row[0]))
-
-    return detailed, index
-
-
-# ---------------------------------------------------------------------------
-# Entry
-# ---------------------------------------------------------------------------
-
-
-def emit(path: Path, payload) -> None:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, separators=(",", ":")))
-    size = path.stat().st_size
-    print(f"wrote {path.relative_to(ROOT)} ({size/1024:.1f} KB)", file=sys.stderr)
-
-
-def build_conus() -> None:
-    """Bake CONUS-wide base layers so ANY US airport the user picks in
-    the typeahead gets a legible map. Uses the same 10 m Natural Earth
-    sources as the Bay Area bakes, DP-simplified at ~500 m — which is
-    the effective pixel resolution at the widest 25 nm zoom. High-
-    detail Bay Area layers are still layered on top when the current
-    center falls inside the Bay bbox — see selectMap() in
-    web/src/data.ts."""
-    # CONUS bbox: (min_lat, max_lat, min_lon, max_lon) — southern tip of
-    # Florida to northern Minnesota, coast to coast. Includes a bit of
-    # southern Canada to catch the Great Lakes properly.
-    conus_bbox = (24.0, 50.0, -125.0, -66.0)
-    # Coastline is OSM-derived at ~17 m tolerance — the highest fidelity
-    # we can ship without exceeding Cloudflare Workers' 25 MiB per-file
-    # limit for static assets. Manhattan clearly narrows toward the top,
-    # Miami Beach is a barrier island, Cape Cod is Cape-Cod-shaped.
-    # ~23 MB raw / 6 MB gzipped.
-    coast = build_coastline_osm(conus_bbox, tol_deg=0.00015)
-    emit(OUT_DIR / "coastline_conus.json", coast)
-    # Land + minor islands + lakes (Great Lakes, Salton Sea, etc.) all
-    # emitted into land_conus as triangles. The renderer just paints
-    # the tint color; whether it's a fresh water lake or a landmass
-    # doesn't matter for the "spatial context" purpose here.
-    land = build_land(conus_bbox, tol_deg=0.005,
-                      layer_keys=("land", "islands"))
-    emit(OUT_DIR / "land_conus.json", land)
-    # Lakes as their own layer so they can render as WATER cutouts
-    # (background color) over the land tint — otherwise Great Lakes
-    # cities read as landlocked. Bumped to the finest tolerance
-    # Natural Earth 10 m supports (~111 m). NE plateaus around
-    # ~16 k vertices no matter how fine we DP — inherent source
-    # limit. OSM `natural=water` would be crisper but requires an
-    # Overpass build-time query; deferred until visually needed.
-    lakes = build_land(conus_bbox, tol_deg=0.001, layer_keys=("lakes",))
-    emit(OUT_DIR / "lakes_conus.json", lakes)
-    # Rivers as centerlines. Fills the gap for major rivers like the
-    # Hudson (upper section) that OSM tags as `waterway=river` (not
-    # coastline) — those otherwise render as landmass on the coastline
-    # dataset.
-    rivers = build_rivers(conus_bbox, tol_deg=0.001)
-    emit(OUT_DIR / "rivers_conus.json", rivers)
-    # OSM ocean/tidal water polygons. Cuts out Hudson River (lower,
-    # tidal), Chesapeake Bay branches, SF Bay tributaries, Long Island
-    # Sound, etc. — none of which appear in the coastline linestring
-    # dataset or in the river centerlines. Raw polygon outlines
-    # (no triangulation); the browser fills them natively.
-    water = build_water_osm(conus_bbox, tol_deg=0.0005)
-    if water:
-        # Not a LandData shape — write as raw polygons.
-        import json as _json
-        (OUT_DIR / "water_conus.json").write_text(_json.dumps(water, separators=(",", ":")))
-        print(f"wrote water_conus.json ({sum(len(p) for p in water)} pts, {len(water)} polys)",
-              file=sys.stderr)
-    # Roads: TIGER/Line primary roads (Interstates + US + State
-    # Routes), from the US Census Bureau. Public domain, US-only,
-    # 17 k line segments, single ~38 MB shapefile download. ~10 m
-    # tolerance (near-native) = ~10 MB raw / 3 MB gzipped — fits
-    # under Cloudflare's 25 MiB per-file limit with margin.
-    roads = build_roads_tiger(conus_bbox, tol_deg=0.0001)
-    if roads:
-        emit(OUT_DIR / "roads_conus.json", roads)
-    else:
-        # pyshp missing — fall back to Natural Earth roads.
-        roads = build_roads(conus_bbox, tol_deg=0.003,
-                            keep_types=("Major Highway", "Secondary Highway"))
-        emit(OUT_DIR / "roads_conus.json", roads)
+    # Sort by tier desc then ICAO so large hubs rank first in the picker.
+    tier_lookup = {
+        (a.get("ident") or "").strip(): AIRPORT_TIER.get(a.get("type", ""), 0)
+        for a in airports
+    }
+    index.sort(key=lambda row: (-tier_lookup.get(str(row[0]), 0), str(row[0])))
+    return index
 
 
 def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--center", default=f"{DEFAULT_CENTER_LAT},{DEFAULT_CENTER_LON}")
-    p.add_argument("--radius-km", type=float, default=DEFAULT_RADIUS_KM)
-    p.add_argument("--conus", action="store_true",
-                   help="Also bake a CONUS-wide 50m base layer.")
-    args = p.parse_args()
-
-    lat_str, lon_str = args.center.split(",")
-    center_lat, center_lon = float(lat_str), float(lon_str)
-    bbox = bbox_from_center(center_lat, center_lon, args.radius_km)
-
-    coast = build_coastline(bbox)
-    emit(OUT_DIR / "coastline.json", coast)
-
-    land = build_land(bbox)
-    emit(OUT_DIR / "land.json", land)
-
-    roads = build_roads(bbox)
-    emit(OUT_DIR / "roads.json", roads)
-
-    rivers = build_rivers(bbox)
-    emit(OUT_DIR / "rivers.json", rivers)
-
-    detailed, index = build_airports(bbox)
-    emit(OUT_DIR / "airports.json", detailed)
-    emit(OUT_DIR / "airport_index.json", index)
-
-    if args.conus:
-        build_conus()
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    index = build_airport_index()
+    out_path = OUT_DIR / "airport_index.json"
+    out_path.write_text(json.dumps(index, separators=(",", ":")))
+    size = out_path.stat().st_size
+    print(
+        f"wrote {out_path.relative_to(ROOT)} ({len(index)} airports, "
+        f"{size/1024:.1f} KB)",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":
