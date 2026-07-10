@@ -58,21 +58,24 @@ Aviation convention throughout.
 - **Range label** — sits inside the outer ring on the E-of-N spoke by default, walks around symmetrically if it would collide with an airport label.
 - **N/E/S/W cardinals removed** — north is always up on a radar; the cardinals were spending pixels on redundant info and crowding the bezel.
 
-## 6. Focus points (double-tap to change center)
+## 6. Two-gesture screen ring + case-tap input
 
-Cycle the radar's center through a small preset ring of Bay Area airports without touching the WiFi portal.
+The whole app is one ring of 5 screens navigated with two gestures — no mode context to remember.
 
-- **`src/services/focus_points.cpp`** — 8-entry ring: Sutro (public landmark default), SFO, OAK, SJC, HWD, SQL, PAO, HAF. Each entry carries its own preferred range preset so switching to a GA field auto-zooms to 5 nm.
-- **`src/services/radar_location.h`** — new `setOverride()` / `clearOverride()` so `lat()`/`lon()` transparently redirect while a focus point is active. No code outside `services::location` needs to know.
-- **Persistence** — current focus index saved to Preferences alongside the range preset.
+- **Screen ring:** `Radar @ Home → Radar @ Focus 2 → Radar @ Focus 3 → Weather → Cockpit → wraps`. Each focus airport is its own radar position; the focus and screen concepts are unified. Default focus ring is `{Home (Sutro), SFO, OAK}` — user-editable via Settings.
+- **Gestures:** `single tap` = adjust the current screen (cycle range on radar, refresh METAR on weather, no-op on cockpit); `double tap` = advance to the next screen. Long-press BOOT 3 s still resets Wi-Fi.
+- **`BootTap`** state machine — trimmed to `{None, Single, Double}`. Software window shrunk from 400 ms → 250 ms since there's no third-tap to wait for.
+- **Optional ADXL345 accelerometer** (`src/services/tap_sensor.cpp`) — sits on the shared I²C bus at address 0x53. When present, its hardware SINGLE_TAP + DOUBLE_TAP interrupts short-circuit the software discriminator in `bootButtonConsumeEvent()`, so knocking the case fires gestures instantly. Silent-fail on missing hardware — the BOOT-button path remains as fallback. Aimed at retro enclosures where the BOOT button isn't reachable from outside.
+- **`src/services/radar_location.h`** — `setOverride()` / `clearOverride()` so `lat()`/`lon()` transparently redirect while a focus point is active. No code outside `services::location` needs to know.
+- **Persistence** — current focus index saved to Preferences.
 
-## 7. Triple-tap weather view
+## 7. Live weather view
 
 A second view mode showing nearby airports as VFR/MVFR/IFR/LIFR colored dots.
 
 - **`src/services/weather.cpp`** — bulk METAR fetch from `aviationweather.gov` (public, no key, works globally), local flight-category derivation (worst of ceiling and visibility per FAA rules).
 - **`src/ui/weather_map.cpp`** — auto-fits the station bbox to the viewport, nudges overlapping dots apart, draws land + coastline underneath (from tiles, see section 3) for context, single-blit via the shared frame sprite so the freshness updater doesn't strobe.
-- **`BootTap`** state machine — extended from single/double to single/double/triple with a 400 ms quiet window (single-tap latency grew by ~150 ms; worth it for the third gesture).
+- Reached via a double-tap from any of the three radar positions in the screen ring (see section 6).
 
 ## 8. Layer toggles
 
@@ -90,7 +93,7 @@ Browser port so friends can try the interface without hardware. Same visual lang
 - **`scripts/build_web_data.py`** — bakes only `airport_index.json`, the global typeahead index used by the Settings picker. Everything else the browser needs comes from the tile pyramid.
 - **`web/netlify/functions/adsb.mjs`** — Netlify Function that proxies `airplanes.live` / `opendata.adsb.fi` (no CORS on either). Also `metar.mjs` for the same reason on `aviationweather.gov`.
 - **Weather** — talks to `aviationweather.gov` through the METAR proxy. Same upstream the firmware uses, works globally.
-- **Touch + click + keyboard** — one central `Tap` discriminator handles all three input modes; single/double/triple map to range/focus/weather just like on hardware. Layer toggles are clickable buttons on mobile, `1`–`5` keys on desktop.
+- **Touch + click + keyboard** — one central `Tap` discriminator handles all three input modes; single = adjust current screen, double = advance the same 5-screen ring as the hardware. Layer toggles are clickable buttons on mobile, `1`–`5` keys on desktop.
 - **Deploy** — GitHub Actions → Netlify on every push to the deploying branch. See [`web/DEPLOY.md`](web/DEPLOY.md) for setup.
 
 ## 10. Test infrastructure

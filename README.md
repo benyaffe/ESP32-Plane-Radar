@@ -32,14 +32,21 @@ Firmware for an **ESP32-C3 Super Mini** and a **1.28″ round GC9A01** display (
 
 After Wi‑Fi is saved, the device reconnects automatically; the radar runs in the main loop with periodic ADS-B updates (~5 s).
 
-## Controls (BOOT, GPIO 9, active LOW)
+## Controls
+
+The device is a **five-screen ring** cycled by tapping the case (or the BOOT button):
+
+```text
+Radar @ Home → Radar @ Focus 2 → Radar @ Focus 3 → Weather → Cockpit → (wraps)
+```
 
 | Action | Effect |
-|--------|--------|
-| **Short tap** | Cycle range preset (5 → 10 → 15 → 25 km); saved to flash |
-| **Hold 3 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
+| -------- | -------- |
+| **Single tap** | Adjust the current screen — cycle range on radar, refresh METAR on weather, no-op on cockpit |
+| **Double tap** | Advance to the next screen in the ring |
+| **BOOT hold 3 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
 
-During setup you can also hold BOOT at power-on to force a credential reset (same as the long press).
+Tap events come from either the BOOT button (GPIO 9, active LOW) *or* an optional ADXL345 accelerometer on the shared I²C bus (SDA=GPIO 6, SCL=GPIO 7, address 0x53) — when wired, knocking the enclosure fires the same gestures. Silent-fail on missing hardware: with no ADXL345 present, the BOOT button remains the only input path.
 
 ## Wi‑Fi setup portal
 
@@ -160,7 +167,7 @@ src/
 ## Wiring (GC9A01 ↔ ESP32-C3 Super Mini)
 
 | Display | ESP32-C3 |
-|---------|----------|
+| -------- | -------- |
 | VCC | 3V3 |
 | GND | GND |
 | RST | GPIO **0** |
@@ -169,6 +176,21 @@ src/
 | SDA (MOSI) | GPIO **3** |
 | SCL (SCLK) | GPIO **4** |
 | BOOT (user) | GPIO **9** |
+
+### Optional ADXL345 accelerometer (knock-the-case input)
+
+Shares the I²C bus with the optional BME280 sensor. Wire this if the BOOT button isn't easily reachable through your enclosure.
+
+| ADXL345 | ESP32-C3 |
+| -------- | -------- |
+| VCC | 3V3 |
+| GND | GND |
+| SDA | GPIO **6** |
+| SCL | GPIO **7** |
+| CS | tie to VCC (I²C mode) |
+| SDO | tie to GND (address 0x53) |
+
+INT1 pin left disconnected — the firmware polls the chip's INT_SOURCE register each loop tick (~100 Hz).
 
 ## Build
 
