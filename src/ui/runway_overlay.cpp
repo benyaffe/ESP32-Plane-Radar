@@ -7,6 +7,9 @@
 
 #include "data/focus_airports.h"
 #include "data/large_airports.h"
+#include "data/tile_math.h"
+#include "data/tile_reader.h"
+#include "data/tile_store.h"
 #include "hardware/display_font.h"
 #include "services/focus_points.h"
 #include "services/radar_location.h"
@@ -320,6 +323,76 @@ bool focusMatches(const char* airport_ident) {
   return std::strcmp(airport_ident + 1, fp.name) == 0;
 }
 
+// Adapter shapes so the existing drawRunwayLineT / drawAirportLabelT
+// templates work against tile-parsed data without copying the whole
+// template body.
+struct TileRunway {
+  int32_t le_lat_e7;
+  int32_t le_lon_e7;
+  int32_t he_lat_e7;
+  int32_t he_lon_e7;
+};
+
+struct TileAirport {
+  int32_t lat_e7;
+  int32_t lon_e7;
+  char ident[9];
+};
+
+// Tile-backed pass: iterate airports in the SECTION_AIRPORTS payload
+// of the current-location tile, draw runways for airports in range,
+// then labels. Ignores the RunwaysLarge / RunwaysFocus split from the
+// baked path — the tile is a single unified airport list.
+void drawRunwaysFromTile(lgfx::LGFXBase& gfx,
+                          const data::tile::TileBytes& bytes,
+                          float radius_km) {
+  data::tile::TileReader reader;
+  if (!reader.init(bytes.data, bytes.size)) return;
+  uint32_t sec_len = 0;
+  const uint8_t* p = reader.sectionBegin(data::tile::Section::Airports, &sec_len);
+  if (p == nullptr || sec_len == 0) return;
+  const uint8_t* end = p + sec_len;
+  uint16_t airport_count = 0;
+  if (!data::tile::TileReader::readSectionCount(&p, end, &airport_count)) return;
+
+  TileAirport labeled[kMaxAirportLabels];
+  size_t label_count = 0;
+
+  for (uint16_t i = 0; i < airport_count; ++i) {
+    data::tile::AirportView view;
+    if (!data::tile::TileReader::readAirport(&p, end, &view)) return;
+
+    float dx_km = 0.0f;
+    float dy_km = 0.0f;
+    float dist_km = 0.0f;
+    offsetKmFromCenter(e7ToDeg(view.lat_e7), e7ToDeg(view.lon_e7), &dx_km,
+                       &dy_km, &dist_km);
+    if (dist_km > radius_km) continue;
+
+    bool drew_any_runway = false;
+    for (uint8_t r = 0; r < view.runway_count; ++r) {
+      int32_t la1 = 0, lo1 = 0, la2 = 0, lo2 = 0;
+      view.getRunway(r, &la1, &lo1, &la2, &lo2);
+      TileRunway rw = {la1, lo1, la2, lo2};
+      if (drawRunwayLineT(gfx, rw)) drew_any_runway = true;
+    }
+
+    if (drew_any_runway && label_count < kMaxAirportLabels) {
+      TileAirport& row = labeled[label_count++];
+      row.lat_e7 = view.lat_e7;
+      row.lon_e7 = view.lon_e7;
+      std::memcpy(row.ident, view.ident, sizeof(row.ident));
+    }
+  }
+
+  if (label_count == 0) return;
+  initRunwayLabelStyle(gfx);
+  applyRunwayLabelStyle(gfx);
+  for (size_t i = 0; i < label_count; ++i) {
+    drawAirportLabelT(gfx, labeled[i]);
+  }
+}
+
 void drawLargeAirportRunways(lgfx::LGFXBase& gfx) {
   if (!radar::showRunways()) {
     return;
@@ -329,6 +402,21 @@ void drawLargeAirportRunways(lgfx::LGFXBase& gfx) {
   if (!large_on && !focus_on) return;
   displayFontEnsureLoaded(gfx);
   const float radius_km = radar::fetchRadiusKm();
+
+  // Tile-backed path takes over when the TileStore has a fetched
+  // tile at the current location. Falls through to the compiled-in
+  // Bay Area airport tables when only the fallback tile is available
+  // (until milestone 2 step 9 wires up the disk/network loader and
+  // removes the baked path).
+  uint16_t tx = 0, ty = 0;
+  data::tile::tileOfLatLon(data::tile::kRenderZoom,
+                            services::location::lat(),
+                            services::location::lon(), &tx, &ty);
+  const auto tbytes = data::tile::store().get(data::tile::kRenderZoom, tx, ty);
+  if (!tbytes.is_fallback) {
+    drawRunwaysFromTile(gfx, tbytes, radius_km);
+    return;
+  }
 
   uint16_t label_airports[kMaxAirportLabels];
   size_t label_count = 0;
