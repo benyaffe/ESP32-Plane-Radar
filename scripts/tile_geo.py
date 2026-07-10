@@ -1,9 +1,4 @@
-"""Pure geometry helpers shared across the tile builder modules.
-
-Kept separate from build_coastlines.py (which will be deleted in a
-later milestone) so the new tile pipeline doesn't inherit a dependency
-that's about to disappear.
-"""
+"""Pure geometry helpers shared across the tile builder modules."""
 from __future__ import annotations
 
 import math
@@ -30,12 +25,7 @@ def clip_polyline_to_bbox(
     coords: list[Point], bbox: tuple[float, float, float, float]
 ) -> list[list[Point]]:
     """Split a polyline at bbox exits, keeping only sub-polylines with
-    >=2 points inside the bbox. bbox = (min_lat, max_lat, min_lon, max_lon).
-
-    This mirrors the current build_coastlines.py behavior exactly so
-    the visual output of the new pipeline matches the baked Bay Area
-    coastline it will replace.
-    """
+    >=2 points inside the bbox. bbox = (min_lat, max_lat, min_lon, max_lon)."""
     min_lat, max_lat, min_lon, max_lon = bbox
     out: list[list[Point]] = []
     current: list[Point] = []

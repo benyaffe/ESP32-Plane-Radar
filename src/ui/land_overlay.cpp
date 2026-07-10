@@ -1,6 +1,5 @@
 #include "ui/land_overlay.h"
 
-#include "data/land.h"
 #include "data/tile_math.h"
 #include "data/tile_reader.h"
 #include "data/tile_store.h"
@@ -64,29 +63,6 @@ void drawPolygon(lgfx::LGFXBase& gfx, const data::tile::PolylineView& view,
   }
 }
 
-void drawFromBaked(lgfx::LGFXBase& gfx) {
-  using namespace data::land;
-  const uint16_t color = radar::kColorLand;
-  for (size_t i = 0; i < kTriangleCount; ++i) {
-    const Triangle& t = kTriangles[i];
-    int x[3];
-    int y[3];
-    const uint16_t vidx[3] = {t.v0, t.v1, t.v2};
-    for (int k = 0; k < 3; ++k) {
-      const Vertex& v = kVertices[vidx[k]];
-      proj::latLonToScreen(proj::e7ToDeg(v.lat_e7), proj::e7ToDeg(v.lon_e7),
-                           &x[k], &y[k]);
-    }
-    if ((x[0] < 0 && x[1] < 0 && x[2] < 0) ||
-        (x[0] > 239 && x[1] > 239 && x[2] > 239) ||
-        (y[0] < 0 && y[1] < 0 && y[2] < 0) ||
-        (y[0] > 239 && y[1] > 239 && y[2] > 239)) {
-      continue;
-    }
-    gfx.fillTriangle(x[0], y[0], x[1], y[1], x[2], y[2], color);
-  }
-}
-
 void drawFromTile(lgfx::LGFXBase& gfx, const data::tile::TileBytes& bytes) {
   const uint16_t color = radar::kColorLand;
   data::tile::TileReader reader;
@@ -109,16 +85,15 @@ void drawFromTile(lgfx::LGFXBase& gfx, const data::tile::TileBytes& bytes) {
 void draw(lgfx::LGFXBase& gfx) {
   if (!ui::layers::enabled(ui::layers::Layer::Land)) return;
 
+  // Fallback tile carries a low-detail world land section, so this
+  // path renders continents at boot even before the real z=7 tile is
+  // fetched — no baked Bay Area shortcut needed.
   uint16_t tx = 0, ty = 0;
   data::tile::tileOfLatLon(data::tile::kRenderZoom,
                             services::location::lat(),
                             services::location::lon(), &tx, &ty);
   const auto bytes = data::tile::store().get(data::tile::kRenderZoom, tx, ty);
-  if (bytes.is_fallback) {
-    drawFromBaked(gfx);
-  } else {
-    drawFromTile(gfx, bytes);
-  }
+  drawFromTile(gfx, bytes);
 }
 
 }  // namespace ui::land

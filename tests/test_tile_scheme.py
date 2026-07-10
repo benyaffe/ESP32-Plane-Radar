@@ -17,9 +17,8 @@ def test_zoom_levels_contract_from_plan():
 
 def test_baseline_tolerance_matches_coastline_quality_contract():
     """Finest zoom must render at the plan's 0.002° baseline (~222 m).
-    See tests/test_coastline_builder.py::
-    test_default_simplify_tolerance_is_the_quality_baseline for the
-    corresponding contract on the current per-focus pipeline."""
+    Lock inherited from the retired per-focus baker — the tile pipeline
+    is now the sole source of truth for this tolerance."""
     assert ts.SIMPLIFY_TOL_DEG[7] == 0.002
 
 

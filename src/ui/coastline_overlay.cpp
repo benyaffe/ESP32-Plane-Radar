@@ -2,7 +2,6 @@
 
 #include <cstdio>
 
-#include "data/coastlines.h"
 #include "data/tile_math.h"
 #include "data/tile_reader.h"
 #include "data/tile_store.h"
@@ -18,39 +17,6 @@ namespace {
 // and aircraft. Uses the same palette entry as the grid rings for now
 // (M4/M6 will move this to per-layer style + clarity gating).
 inline uint16_t coastColor() { return radar::kColorGrid; }
-
-// Draw coastlines from the compiled-in Bay Area data. This is the
-// pre-refactor code path — used only when the TileStore has no
-// fetched tile for the current location (fallback in flash has no
-// coast section). Removed in milestone 2 step 9 once tile fetch is
-// wired up end-to-end.
-void drawFromBaked(lgfx::LGFXBase& gfx) {
-  using namespace data::coastlines;
-  const uint16_t color = coastColor();
-  for (size_t i = 0; i < kPolylineCount; ++i) {
-    const Polyline& pl = kPolylines[i];
-    if (pl.count < 2) continue;
-
-    int prev_x = 0;
-    int prev_y = 0;
-    proj::latLonToScreen(proj::e7ToDeg(kPoints[pl.start].lat_e7),
-                         proj::e7ToDeg(kPoints[pl.start].lon_e7),
-                         &prev_x, &prev_y);
-    for (uint16_t j = 1; j < pl.count; ++j) {
-      int x = 0;
-      int y = 0;
-      const Point& p = kPoints[pl.start + j];
-      proj::latLonToScreen(proj::e7ToDeg(p.lat_e7), proj::e7ToDeg(p.lon_e7),
-                           &x, &y);
-      int cx0 = 0, cy0 = 0, cx1 = 0, cy1 = 0;
-      if (proj::clipSegmentToDisc(prev_x, prev_y, x, y, &cx0, &cy0, &cx1, &cy1)) {
-        gfx.drawLine(cx0, cy0, cx1, cy1, color);
-      }
-      prev_x = x;
-      prev_y = y;
-    }
-  }
-}
 
 // Draw coastlines from a fetched tile — iterate the SECTION_COAST
 // polylines through the TileReader API.
@@ -93,20 +59,14 @@ void drawFromTile(lgfx::LGFXBase& gfx, const data::tile::TileBytes& bytes) {
 void draw(lgfx::LGFXBase& gfx) {
   if (!ui::layers::enabled(ui::layers::Layer::Coastline)) return;
 
-  // Look up the tile the device is currently sitting in. If TileStore
-  // has a fetched tile, use its coast section; otherwise fall through
-  // to the compiled-in Bay Area data until milestone 2 step 9 wires
-  // up the disk/network loader and removes the baked path.
+  // Pull the tile the device is currently sitting in. The fallback
+  // tile has no coast section — quiet until a real tile arrives.
   uint16_t tx = 0, ty = 0;
   data::tile::tileOfLatLon(data::tile::kRenderZoom,
                             services::location::lat(),
                             services::location::lon(), &tx, &ty);
   const auto bytes = data::tile::store().get(data::tile::kRenderZoom, tx, ty);
-  if (bytes.is_fallback) {
-    drawFromBaked(gfx);
-  } else {
-    drawFromTile(gfx, bytes);
-  }
+  drawFromTile(gfx, bytes);
 }
 
 }  // namespace ui::coastline
