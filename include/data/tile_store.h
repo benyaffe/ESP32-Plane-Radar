@@ -35,6 +35,12 @@ struct TileBytes {
   bool is_fallback;
 };
 
+// Global singleton — overlays call data::tile::store().get(...) rather
+// than each holding their own reference. One-copy design keeps the
+// LRU state coherent across all callers.
+class TileStore;
+TileStore& store();
+
 class TileStore {
  public:
   TileStore();

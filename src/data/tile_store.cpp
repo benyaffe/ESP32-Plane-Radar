@@ -7,6 +7,11 @@
 
 namespace data::tile {
 
+TileStore& store() {
+  static TileStore s_instance;
+  return s_instance;
+}
+
 TileStore::TileStore() {
   for (auto& e : entries_) {
     e.used = false;
