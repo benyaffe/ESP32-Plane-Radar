@@ -50,7 +50,7 @@ export function invalidate(): void {
 // Great-circle-ish distance in nautical miles. 1° latitude ≈ 60 nm;
 // longitude scales by cos(lat). Good enough at radar zoom.
 const NM_PER_DEG = 60;
-function distanceNm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+export function distanceNm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const cosLat = Math.cos((lat1 * Math.PI) / 180);
   const dLatNm = (lat2 - lat1) * NM_PER_DEG;
   const dLonNm = (lon2 - lon1) * NM_PER_DEG * cosLat;
@@ -100,7 +100,7 @@ export function rebuildStations(
 }
 
 // FAA rules — worst-of ceiling and visibility wins.
-function deriveCategory(ceilingFt: number, visibilitySm: number): Category {
+export function deriveCategory(ceilingFt: number, visibilitySm: number): Category {
   const noCeiling = !isFinite(ceilingFt);
   const c = noCeiling ? "VFR"
     : ceilingFt < 500 ? "LIFR"
@@ -115,14 +115,14 @@ function deriveCategory(ceilingFt: number, visibilitySm: number): Category {
   return order[c] > order[v] ? c : v;
 }
 
-interface CloudLayer { base: number | null; amount: string | null; }
+export interface CloudLayer { base: number | null; amount: string | null; }
 
 // api.weather.gov returns visibility in meters and cloud bases in meters;
 // convert to statute miles and feet AGL for the FAA math.
 const M_PER_SM = 1609.344;
 const M_PER_FT = 0.3048;
 
-function ceilingFromClouds(clouds: CloudLayer[] | null | undefined): number {
+export function ceilingFromClouds(clouds: CloudLayer[] | null | undefined): number {
   if (!clouds) return Infinity;
   let ceiling = Infinity;
   for (const layer of clouds) {

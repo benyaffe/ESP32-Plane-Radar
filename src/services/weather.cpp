@@ -17,6 +17,7 @@
 #endif
 
 #include "services/metar_config.h"
+#include "services/weather_category.h"
 
 namespace services::weather {
 
@@ -34,28 +35,6 @@ unsigned long s_last_update_ms = 0;
 
 constexpr float kNmPerDeg = 60.0f;   // 1° of lat ≈ 60 nm
 constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
-
-// FAA flight-category rules — worst of ceiling or visibility drives the
-// bucket. "Ceiling" is the LOWEST BKN/OVC layer; FEW/SCT don't count.
-Category deriveCategory(int32_t ceiling_ft, int visibility_sm) {
-  const bool no_ceiling = (ceiling_ft == INT32_MAX);
-  auto ceilCat = [&]() -> Category {
-    if (no_ceiling) return Category::VFR;
-    if (ceiling_ft < 500)  return Category::LIFR;
-    if (ceiling_ft < 1000) return Category::IFR;
-    if (ceiling_ft <= 3000) return Category::MVFR;
-    return Category::VFR;
-  };
-  auto visCat = [&]() -> Category {
-    if (visibility_sm < 1) return Category::LIFR;
-    if (visibility_sm < 3) return Category::IFR;
-    if (visibility_sm <= 5) return Category::MVFR;
-    return Category::VFR;
-  };
-  const Category c1 = ceilCat();
-  const Category c2 = visCat();
-  return (static_cast<uint8_t>(c1) > static_cast<uint8_t>(c2)) ? c1 : c2;
-}
 
 int parseVisibility(JsonVariantConst v) {
   if (v.is<const char*>()) {

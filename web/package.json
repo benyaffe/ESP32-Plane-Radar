@@ -7,12 +7,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.0.0",
     "typescript": "~5.5.4",
     "vite": "^5.4.10",
+    "vitest": "^4.1.10",
     "wrangler": "^4.0.0"
   },
   "allowScripts": {
