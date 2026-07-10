@@ -5,8 +5,10 @@
 #include <cstdio>
 #include <cstring>
 
-#include "data/coastlines.h"
-#include "data/land.h"
+#include "data/tile_math.h"
+#include "data/tile_reader.h"
+#include "data/tile_store.h"
+#include "geo/ear_clip.h"
 #include "hardware/display.h"
 #include "hardware/display_font.h"
 #include "services/metar_config.h"
@@ -135,51 +137,145 @@ bool bboxOverlapsScreen(int min_x, int max_x, int min_y, int max_y) {
   return true;
 }
 
-// Land: iterate the baked triangles and fill them at weather zoom.
-// Reject only when the triangle's screen bbox is fully off-frame —
-// vertex-based "inside the projection disc" tests are wrong at high
-// zoom, because a triangle whose three corners all project past the
-// bezel can still cover the visible disc entirely (imagine a big
-// Central Valley triangle when we're zoomed on the Bay).
-void drawLand(lgfx::LGFXBase& gfx) {
-  const uint16_t color = radar::kColorLand;
-  for (size_t i = 0; i < data::land::kTriangleCount; ++i) {
-    const data::land::Triangle& t = data::land::kTriangles[i];
-    const data::land::Vertex& v0 = data::land::kVertices[t.v0];
-    const data::land::Vertex& v1 = data::land::kVertices[t.v1];
-    const data::land::Vertex& v2 = data::land::kVertices[t.v2];
-    int x0, y0, x1, y1, x2, y2;
-    projectLatLon(v0.lat_e7 * kE7, v0.lon_e7 * kE7, &x0, &y0);
-    projectLatLon(v1.lat_e7 * kE7, v1.lon_e7 * kE7, &x1, &y1);
-    projectLatLon(v2.lat_e7 * kE7, v2.lon_e7 * kE7, &x2, &y2);
-    const int min_x = std::min({x0, x1, x2});
-    const int max_x = std::max({x0, x1, x2});
-    const int min_y = std::min({y0, y1, y2});
-    const int max_y = std::max({y0, y1, y2});
+// Ear-clip scratch shared by land polygon triangulation. Sized to
+// match land_overlay.cpp — the weather map draws from the same z=7
+// tiles at the same 0.002° simplification, so worst-case polygon
+// vertex counts are identical.
+constexpr size_t kMaxPolyVerts = 1024;
+static geo::Vertex s_polyVerts[kMaxPolyVerts];
+static uint16_t s_earClipScratch[2 * kMaxPolyVerts];
+static uint16_t s_triBuf[3 * (kMaxPolyVerts - 2)];
+
+// Enumerate the (up to 4) z=7 tiles that cover the weather map's
+// current viewport. Center + radius maps to a bbox of ±radius_km in
+// both lat and lon (equirectangular, so lon step widens toward the
+// poles); one lookup per bbox corner catches every tile the visible
+// disc can touch even when the center sits on a tile boundary.
+struct TileId { uint16_t x, y; };
+size_t visibleTiles(TileId out[4]) {
+  const float radius_km = services::metar_config::radiusNm() * kKmPerNm;
+  const float dlat = radius_km / kKmPerDeg;
+  const float dlon = (s_cos_center > 1e-4f)
+                       ? radius_km / (kKmPerDeg * s_cos_center)
+                       : 0.0f;
+  const double corners[4][2] = {
+      {static_cast<double>(s_center_lat + dlat), static_cast<double>(s_center_lon - dlon)},
+      {static_cast<double>(s_center_lat + dlat), static_cast<double>(s_center_lon + dlon)},
+      {static_cast<double>(s_center_lat - dlat), static_cast<double>(s_center_lon - dlon)},
+      {static_cast<double>(s_center_lat - dlat), static_cast<double>(s_center_lon + dlon)},
+  };
+  size_t n = 0;
+  for (const auto& c : corners) {
+    uint16_t tx = 0, ty = 0;
+    data::tile::tileOfLatLon(data::tile::kRenderZoom, c[0], c[1], &tx, &ty);
+    bool dup = false;
+    for (size_t i = 0; i < n; ++i) {
+      if (out[i].x == tx && out[i].y == ty) { dup = true; break; }
+    }
+    if (!dup) out[n++] = {tx, ty};
+  }
+  return n;
+}
+
+// Project a polygon of tile vertices through the weather map's own
+// scale/center, ear-clip it into triangles, and fill each.
+void drawTileLandPolygon(lgfx::LGFXBase& gfx,
+                         const data::tile::PolylineView& view, uint16_t color) {
+  if (view.point_count < 3 || view.point_count > kMaxPolyVerts) return;
+  for (uint16_t i = 0; i < view.point_count; ++i) {
+    int32_t lat_e7 = 0, lon_e7 = 0;
+    view.getPoint(i, &lat_e7, &lon_e7);
+    // ear_clip treats .x/.y as flat coords — pack lon into x, lat into
+    // y so the winding test matches an equirectangular projection.
+    s_polyVerts[i].x = lon_e7;
+    s_polyVerts[i].y = lat_e7;
+  }
+  const int tri_count = geo::triangulate(
+      s_polyVerts, view.point_count, s_triBuf,
+      sizeof(s_triBuf) / sizeof(s_triBuf[0]), s_earClipScratch);
+  if (tri_count <= 0) return;
+  for (int t = 0; t < tri_count; ++t) {
+    int x[3], y[3];
+    for (int k = 0; k < 3; ++k) {
+      const uint16_t vi = s_triBuf[t * 3 + k];
+      projectLatLon(s_polyVerts[vi].y * kE7, s_polyVerts[vi].x * kE7,
+                    &x[k], &y[k]);
+    }
+    const int min_x = std::min({x[0], x[1], x[2]});
+    const int max_x = std::max({x[0], x[1], x[2]});
+    const int min_y = std::min({y[0], y[1], y[2]});
+    const int max_y = std::max({y[0], y[1], y[2]});
     if (!bboxOverlapsScreen(min_x, max_x, min_y, max_y)) continue;
-    gfx.fillTriangle(x0, y0, x1, y1, x2, y2, color);
+    gfx.fillTriangle(x[0], y[0], x[1], y[1], x[2], y[2], color);
   }
 }
 
-// Coastline: iterate polylines segment-by-segment. Reject only if the
-// segment bbox is off-frame — same reasoning as drawLand.
+// Land + coast: pull each tile covering the visible viewport from
+// TileStore, then draw its Land / Coast sections through the weather
+// map's projection.
+void drawLand(lgfx::LGFXBase& gfx) {
+  const uint16_t color = radar::kColorLand;
+  TileId tiles[4];
+  const size_t nt = visibleTiles(tiles);
+  for (size_t ti = 0; ti < nt; ++ti) {
+    const auto bytes = data::tile::store().get(data::tile::kRenderZoom,
+                                                tiles[ti].x, tiles[ti].y);
+    data::tile::TileReader reader;
+    if (!reader.init(bytes.data, bytes.size)) continue;
+    uint32_t sec_len = 0;
+    const uint8_t* p =
+        reader.sectionBegin(data::tile::Section::Land, &sec_len);
+    if (p == nullptr || sec_len == 0) continue;
+    const uint8_t* end = p + sec_len;
+    uint16_t poly_count = 0;
+    if (!data::tile::TileReader::readSectionCount(&p, end, &poly_count)) continue;
+    for (uint16_t i = 0; i < poly_count; ++i) {
+      data::tile::PolylineView view;
+      if (!data::tile::TileReader::readPolyline(&p, end, &view)) break;
+      drawTileLandPolygon(gfx, view, color);
+    }
+  }
+}
+
 void drawCoast(lgfx::LGFXBase& gfx) {
   const uint16_t color = tft.color565(radar::kBgR + 40, radar::kBgG + 60,
                                       radar::kBgB + 40);
-  for (size_t i = 0; i < data::coastlines::kPolylineCount; ++i) {
-    const data::coastlines::Polyline& pl = data::coastlines::kPolylines[i];
-    for (uint16_t k = 1; k < pl.count; ++k) {
-      const data::coastlines::Point& a = data::coastlines::kPoints[pl.start + k - 1];
-      const data::coastlines::Point& b = data::coastlines::kPoints[pl.start + k];
-      int ax, ay, bx, by;
-      projectLatLon(a.lat_e7 * kE7, a.lon_e7 * kE7, &ax, &ay);
-      projectLatLon(b.lat_e7 * kE7, b.lon_e7 * kE7, &bx, &by);
-      const int min_x = std::min(ax, bx);
-      const int max_x = std::max(ax, bx);
-      const int min_y = std::min(ay, by);
-      const int max_y = std::max(ay, by);
-      if (!bboxOverlapsScreen(min_x, max_x, min_y, max_y)) continue;
-      gfx.drawLine(ax, ay, bx, by, color);
+  TileId tiles[4];
+  const size_t nt = visibleTiles(tiles);
+  for (size_t ti = 0; ti < nt; ++ti) {
+    const auto bytes = data::tile::store().get(data::tile::kRenderZoom,
+                                                tiles[ti].x, tiles[ti].y);
+    data::tile::TileReader reader;
+    if (!reader.init(bytes.data, bytes.size)) continue;
+    uint32_t sec_len = 0;
+    const uint8_t* p =
+        reader.sectionBegin(data::tile::Section::Coast, &sec_len);
+    if (p == nullptr || sec_len == 0) continue;
+    const uint8_t* end = p + sec_len;
+    uint16_t poly_count = 0;
+    if (!data::tile::TileReader::readSectionCount(&p, end, &poly_count)) continue;
+    for (uint16_t i = 0; i < poly_count; ++i) {
+      data::tile::PolylineView view;
+      if (!data::tile::TileReader::readPolyline(&p, end, &view)) break;
+      if (view.point_count < 2) continue;
+      int32_t lat_e7 = 0, lon_e7 = 0;
+      view.getPoint(0, &lat_e7, &lon_e7);
+      int prev_x = 0, prev_y = 0;
+      projectLatLon(lat_e7 * kE7, lon_e7 * kE7, &prev_x, &prev_y);
+      for (uint16_t k = 1; k < view.point_count; ++k) {
+        view.getPoint(k, &lat_e7, &lon_e7);
+        int x = 0, y = 0;
+        projectLatLon(lat_e7 * kE7, lon_e7 * kE7, &x, &y);
+        const int min_x = std::min(prev_x, x);
+        const int max_x = std::max(prev_x, x);
+        const int min_y = std::min(prev_y, y);
+        const int max_y = std::max(prev_y, y);
+        if (bboxOverlapsScreen(min_x, max_x, min_y, max_y)) {
+          gfx.drawLine(prev_x, prev_y, x, y, color);
+        }
+        prev_x = x;
+        prev_y = y;
+      }
     }
   }
 }
