@@ -14,6 +14,7 @@
 #include "services/outdoor_temp.h"
 #include "services/radar_location.h"
 #include "services/tile_cache.h"
+#include "services/tile_fetch.h"
 #include "services/wifi_setup.h"
 #include "ui/cockpit_screen.h"
 #include "ui/layer_style.h"
@@ -184,6 +185,8 @@ void loop() {
   } else {
     g_wifi_down_since = 0;
     services::outdoor_temp::loop();
+    // Kicks a tile download only when the location tile has changed.
+    services::tile_fetch::loop();
     if (g_screen == Screen::MetarWeather) {
       // Repaint every ~1s so the "n min ago" age updates smoothly;
       // refresh() itself no-ops until the 5 min TTL expires.
