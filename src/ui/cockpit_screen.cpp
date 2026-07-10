@@ -65,7 +65,7 @@ void drawTime(LGFX_Sprite& g, const std::tm& t) {
   // "1" is narrower in Font7 — nudge the anchor left when the hour starts
   // with '1' so the two glyphs land visually centered.
   const int cx = (t.tm_hour >= 10 && t.tm_hour <= 19) ? 115 : 120;
-  const int cy = 108;
+  const int cy = radar::kCenterY;
   char buf[8];
   std::snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
   g.setFont(&fonts::Font7);
@@ -214,7 +214,7 @@ void drawUnsyncedPlaceholder(LGFX_Sprite& g) {
   g.setFont(&fonts::Font7);
   g.setTextDatum(textdatum_t::middle_center);
   g.setTextColor(colAmber(), radar::kColorBackground);
-  g.drawString("--:--", 120, 108);
+  g.drawString("--:--", radar::kCenterX, radar::kCenterY);
   g.setFont(&fonts::Font0);
   g.setTextDatum(textdatum_t::top_center);
   g.setTextSize(1);

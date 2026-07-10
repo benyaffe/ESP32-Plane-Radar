@@ -29,8 +29,6 @@ constexpr int kRingCount = 4;
 /** Shared grid stroke: drawWideLine half-width (~2 px total); rings use the same px count. */
 constexpr float kGridStrokeHalfWidth = 1.0f;
 
-constexpr int kCenterDotRadius = 2;
-
 /** Filled aircraft symbol (nose triangle). */
 constexpr int kAircraftNoseLenPx = 8;
 constexpr int kAircraftTailLenPx = 3;
@@ -98,7 +96,6 @@ constexpr uint8_t kLandB = 36;
 extern uint16_t kColorBackground;
 extern uint16_t kColorGrid;
 extern uint16_t kColorLabel;
-extern uint16_t kColorCenter;
 extern uint16_t kColorAircraft;
 extern uint16_t kColorTrackVector;
 extern uint16_t kColorTagType;

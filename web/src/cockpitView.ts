@@ -7,6 +7,7 @@
 
 import { CENTER_X, CENTER_Y, SIZE, PHYSICAL_PANEL_RADIUS } from "./theme";
 import { state } from "./state";
+import { cachedReading, type WxReading } from "./outdoorTemp";
 
 const BG = "rgb(6, 12, 26)";
 const WHITE = "rgb(230, 232, 235)";
@@ -15,26 +16,6 @@ const GREEN = "rgb(80, 220, 80)";
 const FRAME = "rgb(60, 90, 60)";
 const TEMP = "rgb(180, 200, 230)";
 const AMBER = "rgb(255, 190, 40)";
-
-// Placeholder weather — swapped for a real Open-Meteo fetch once the
-// web side gains a fetcher. Uses the same defaults the firmware seeds
-// on native so the two look consistent.
-interface WxReading {
-  tempF: number;
-  windKts: number;
-  windDegFrom: number;
-  baroInHg: number;
-  valid: boolean;
-}
-function currentWx(): WxReading {
-  return {
-    tempF: 61,
-    windKts: 12,
-    windDegFrom: 280,
-    baroInHg: 29.92,
-    valid: true,
-  };
-}
 
 function drawRadialLine(
   ctx: CanvasRenderingContext2D,
@@ -74,7 +55,7 @@ function drawSecondSweep(ctx: CanvasRenderingContext2D, sec: number): void {
 
 function drawTime(ctx: CanvasRenderingContext2D, hour: number, min: number): void {
   const cx = hour >= 10 && hour <= 19 ? 116 : 120;
-  const cy = 108;
+  const cy = CENTER_Y;
   const text = `${hour.toString().padStart(2, "0")}:${min.toString().padStart(2, "0")}`;
   ctx.fillStyle = WHITE;
   // Canvas doesn't have LovyanGFX's seven-segment Font7 — use a bold
@@ -90,7 +71,7 @@ function drawUnsyncedPlaceholder(ctx: CanvasRenderingContext2D): void {
   ctx.font = "bold 40px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("--:--", 120, 108);
+  ctx.fillText("--:--", CENTER_X, CENTER_Y);
   ctx.font = "10px system-ui, sans-serif";
   ctx.fillText("SYNC", CENTER_X, 148);
 }
@@ -199,7 +180,7 @@ export function drawCockpitView(ctx: CanvasRenderingContext2D): void {
 
   drawTicks(ctx);
 
-  const wx = currentWx();
+  const wx = cachedReading();
   drawWindIndicator(ctx, wx);
 
   // Local system clock — on the device SNTP populates this; in the

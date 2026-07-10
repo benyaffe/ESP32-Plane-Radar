@@ -147,16 +147,6 @@ function drawRunways(ctx: CanvasRenderingContext2D, view: ViewFrame, data: MapDa
   }
 }
 
-function drawCenterDot(ctx: CanvasRenderingContext2D): void {
-  ctx.fillStyle = COLORS.centerDot;
-  ctx.beginPath();
-  ctx.arc(CENTER_X, CENTER_Y, 2, 0, Math.PI * 2);
-  // evenodd winding rule guards against overlapping/degenerate
-  // ear-clip triangles cancelling each other out — nonzero can leave
-  // holes if any triangle winds the other way.
-  ctx.fill("evenodd");
-}
-
 // Scale label — small, near the top, using kBaseDeg=12° offset from N
 // like the firmware does. Green (grid color) so it reads as a reference,
 // not a focal element.
@@ -265,7 +255,6 @@ export function renderFrame(ctx: CanvasRenderingContext2D, data: MapData): void 
 
   drawRings(ctx);
   drawRunways(ctx, view, data);
-  drawCenterDot(ctx);
   drawScaleLabel(ctx);
 
   // Aircraft draw last so icons + tags sit above the map. The clip to

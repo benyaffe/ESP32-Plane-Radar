@@ -35,7 +35,6 @@ export const COLORS = {
   coastline:       "rgb(44, 70, 68)",       // subtle teal border
   road:            "rgb(107, 109, 132)",    // slate gray highway
   emergency:       "rgb(255, 0, 0)",        // red (pure — no BGR swap for emergency)
-  centerDot:       "rgb(255, 255, 255)",
 } as const;
 
 // Track vector length constants — mirror firmware:

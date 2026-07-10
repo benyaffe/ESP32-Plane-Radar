@@ -30,7 +30,6 @@ namespace radar {
 uint16_t kColorBackground = 0x0000;
 uint16_t kColorGrid = 0x0320;
 uint16_t kColorLabel = 0xFFFF;
-uint16_t kColorCenter = 0xFFFF;
 uint16_t kColorAircraft = 0x001F;
 uint16_t kColorTrackVector = 0xFFFF;
 uint16_t kColorTagType = 0x5DFF;
@@ -188,7 +187,6 @@ void initPalette() {
   radar::kColorBackground = tft.color565(radar::kBgR, radar::kBgG, radar::kBgB);
   radar::kColorGrid = tft.color565(radar::kGridR, radar::kGridG, radar::kGridB);
   radar::kColorLabel = tft.color565(255, 255, 255);
-  radar::kColorCenter = tft.color565(255, 255, 255);
   // GC9A01 BGR panel: swap R/B in color565 so logical red renders red on screen.
   if (config::kDisplayRgbOrder) {
     radar::kColorAircraft =
@@ -1148,12 +1146,6 @@ void drawCrosshairs(int cx, int cy, int radius, uint16_t color) {
                        radar::kGridStrokeHalfWidth, color);
 }
 
-void drawCenterDot(int cx, int cy) {
-  s_draw->fillSmoothCircle(cx, cy, radar::kCenterDotRadius, radar::kColorCenter);
-  // Focused-airport ICAO label now comes from the runway overlay
-  // (large airports + focus extras). No extra text needed here.
-}
-
 void drawCardinalLabels() {
   const int cx = radar::kCenterX;
   const int cy = radar::kCenterY;
@@ -1276,7 +1268,6 @@ void drawStaticGrid(Gfx& gfx) {
   // then the scale label dodges around them. (N/E/S/W cardinals were
   // removed — north is always up on a radar, so those pixels are wasted.)
   runway::drawLargeAirportRunways(gfx);
-  drawCenterDot(cx, cy);
   drawScaleLabel(cx, cy, grid_r);
   gfx.setTextDatum(textdatum_t::top_left);
 }

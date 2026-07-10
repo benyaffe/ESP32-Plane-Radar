@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #ifdef USE_NATIVE
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #else
@@ -35,42 +36,34 @@ unsigned long s_last_fetch_ms = 0;
 unsigned long s_last_attempt_ms = 0;
 bool s_ever_attempted = false;
 
-#ifndef USE_NATIVE
-
-bool doFetch() {
-  if (WiFi.status() != WL_CONNECTED) return false;
-
-  char url[256];
-  std::snprintf(url, sizeof(url),
+void buildUrl(char* url, size_t len) {
+  std::snprintf(url, len,
                 "http://api.open-meteo.com/v1/forecast?latitude=%.6f"
                 "&longitude=%.6f"
                 "&current=temperature_2m,wind_speed_10m,wind_direction_10m,pressure_msl"
                 "&temperature_unit=fahrenheit&wind_speed_unit=kn"
                 "&forecast_days=1",
                 services::location::lat(), services::location::lon());
+}
 
-  WiFiClient client;
-  HTTPClient http;
-  if (!http.begin(client, url)) return false;
-  http.setTimeout(7000);
-  const int code = http.GET();
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("outdoor_temp: HTTP %d\n", code);
-    http.end();
-    return false;
-  }
-  String payload = http.getString();
-  http.end();
-
+bool ingestPayload(const char* body, size_t body_len) {
   JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, payload);
+  const DeserializationError err = deserializeJson(doc, body, body_len);
   if (err) {
+#ifdef USE_NATIVE
+    std::printf("outdoor_temp: json parse: %s\n", err.c_str());
+#else
     Serial.printf("outdoor_temp: JSON parse error: %s\n", err.c_str());
+#endif
     return false;
   }
   JsonVariant cur = doc["current"];
   if (!cur["temperature_2m"].is<float>() && !cur["temperature_2m"].is<int>()) {
+#ifdef USE_NATIVE
+    std::printf("outdoor_temp: missing temperature_2m\n");
+#else
     Serial.println("outdoor_temp: missing temperature_2m");
+#endif
     return false;
   }
   s_temp_f = cur["temperature_2m"].as<float>();
@@ -92,9 +85,52 @@ bool doFetch() {
   }
   s_valid = true;
   s_last_fetch_ms = millis();
-  Serial.printf("outdoor_temp: %.1fF, wind %.0f@%.0fkt, baro %.2f inHg\n",
-                s_temp_f, s_wind_deg, s_wind_kts, s_baro_inhg);
   return true;
+}
+
+#ifdef USE_NATIVE
+
+bool doFetch() {
+  char url[256];
+  buildUrl(url, sizeof(url));
+  char cmd[512];
+  std::snprintf(cmd, sizeof(cmd), "curl -sf --max-time 8 '%s'", url);
+  FILE* pipe = popen(cmd, "r");
+  if (!pipe) return false;
+  std::string body;
+  body.reserve(4 * 1024);
+  char buf[2048];
+  while (size_t n = std::fread(buf, 1, sizeof(buf), pipe)) {
+    body.append(buf, n);
+  }
+  const int rc = pclose(pipe);
+  if (rc != 0 || body.empty()) {
+    std::printf("outdoor_temp: fetch failed rc=%d body=%zu\n", rc, body.size());
+    return false;
+  }
+  return ingestPayload(body.data(), body.size());
+}
+
+#else
+
+bool doFetch() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  char url[256];
+  buildUrl(url, sizeof(url));
+
+  WiFiClient client;
+  HTTPClient http;
+  if (!http.begin(client, url)) return false;
+  http.setTimeout(7000);
+  const int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("outdoor_temp: HTTP %d\n", code);
+    http.end();
+    return false;
+  }
+  String payload = http.getString();
+  http.end();
+  return ingestPayload(payload.c_str(), payload.length());
 }
 
 #endif
@@ -102,42 +138,17 @@ bool doFetch() {
 }  // namespace
 
 void init() {
-#ifdef USE_NATIVE
-  // Native emulator has no network access — seed the cache with plausible
-  // SF Bay Area values immediately so the cockpit screen shows a full
-  // instrument set the moment it opens. Real hardware overrides these
-  // when the first Open-Meteo fetch lands.
-  s_temp_f = 61.0f;
-  s_wind_kts = 12.0f;
-  s_wind_deg = 280.0f;
-  s_baro_inhg = 29.92f;
-  s_valid = true;
-  s_last_fetch_ms = 1;  // non-zero so age_ms() returns something sensible
-#else
   s_temp_f = NAN;
   s_wind_kts = NAN;
   s_wind_deg = NAN;
   s_baro_inhg = NAN;
   s_valid = false;
   s_last_fetch_ms = 0;
-#endif
   s_last_attempt_ms = 0;
   s_ever_attempted = false;
 }
 
 void loop() {
-#ifdef USE_NATIVE
-  // Native builds get canned readings a few seconds after boot so the
-  // cockpit screen shows a full instrument set without network access.
-  if (!s_valid && millis() > kFirstDelayMs) {
-    s_temp_f = 61.0f;     // typical SF morning
-    s_wind_kts = 12.0f;   // typical SF afternoon westerly
-    s_wind_deg = 280.0f;  // WNW
-    s_baro_inhg = 29.92f; // ISA standard
-    s_valid = true;
-    s_last_fetch_ms = millis();
-  }
-#else
   const unsigned long now = millis();
   const unsigned long since_attempt = now - s_last_attempt_ms;
   const bool first = !s_ever_attempted;
@@ -148,7 +159,6 @@ void loop() {
   s_last_attempt_ms = now;
   s_ever_attempted = true;
   doFetch();
-#endif
 }
 
 Reading cached() {

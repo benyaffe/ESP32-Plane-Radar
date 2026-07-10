@@ -15,6 +15,7 @@ import { mountSettings } from "./settings";
 import { drawWeatherView } from "./weatherView";
 import { drawCockpitView } from "./cockpitView";
 import { refreshIfStale } from "./weather";
+import { refreshIfStale as refreshOutdoorTemp } from "./outdoorTemp";
 import { fetchAircraft } from "./aircraft";
 import { RANGE_PRESETS } from "./theme";
 
@@ -108,6 +109,7 @@ function enterWeather(): void {
 
 function enterCockpit(): void {
   setView("cockpit");
+  refreshOutdoorTemp().then(() => requestFrame()).catch(() => { /* no-op */ });
   startNonRadarTicker();
 }
 
