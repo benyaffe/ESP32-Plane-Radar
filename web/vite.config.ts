@@ -54,5 +54,40 @@ export default defineConfig({
         });
       },
     },
+    {
+      // Dev-only echo of netlify/functions/metar.mjs — vite dev doesn't
+      // run Netlify Functions, so /api/metar 404s locally without this.
+      name: "dev-metar-proxy",
+      configureServer(server) {
+        server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+          if (!req.url?.startsWith("/api/metar")) return next();
+          const url = new URL(req.url, "http://localhost");
+          const bbox = (url.searchParams.get("bbox") ?? "").trim();
+          const parts = bbox.split(",");
+          if (parts.length !== 4 || !parts.every((s) => isFinite(parseFloat(s)))) {
+            res.statusCode = 400;
+            res.setHeader("content-type", "application/json");
+            res.end(JSON.stringify({ error: "bbox=lat_min,lon_min,lat_max,lon_max required" }));
+            return;
+          }
+          const upstream =
+            `https://aviationweather.gov/api/data/metar?bbox=${bbox}&format=json`;
+          try {
+            const upResp = await fetch(upstream, {
+              headers: { "User-Agent": "plane-radar-web-dev" },
+            });
+            const body = await upResp.text();
+            res.statusCode = upResp.status;
+            res.setHeader("content-type", "application/json");
+            res.setHeader("access-control-allow-origin", "*");
+            res.end(body);
+          } catch (err) {
+            res.statusCode = 502;
+            res.setHeader("content-type", "application/json");
+            res.end(JSON.stringify({ error: String(err) }));
+          }
+        });
+      },
+    },
   ],
 });

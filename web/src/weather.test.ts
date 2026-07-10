@@ -54,36 +54,36 @@ describe("ceilingFromClouds", () => {
   });
 
   it("ignores FEW and SCT layers (only BKN/OVC/VV count as ceiling)", () => {
-    // 300m base = ~984 ft, but FEW/SCT don't count → no ceiling.
+    // FEW/SCT never count as ceiling regardless of base altitude.
     const clouds = [
-      { base: 300, amount: "FEW" },
-      { base: 500, amount: "SCT" },
+      { base: 1000, cover: "FEW" },
+      { base: 2000, cover: "SCT" },
     ];
     expect(ceilingFromClouds(clouds)).toBe(Infinity);
   });
 
   it("returns the lowest BKN layer in feet", () => {
-    // 305 m ≈ 1000 ft; 610 m ≈ 2000 ft; lowest wins.
+    // aviationweather.gov cloud bases are already in feet AGL.
     const clouds = [
-      { base: 610, amount: "BKN" },
-      { base: 305, amount: "BKN" },
+      { base: 2000, cover: "BKN" },
+      { base: 1000, cover: "BKN" },
     ];
-    expect(ceilingFromClouds(clouds)).toBeCloseTo(1000, -1);
+    expect(ceilingFromClouds(clouds)).toBe(1000);
   });
 
   it("counts OVC as a ceiling", () => {
-    const clouds = [{ base: 152.4, amount: "OVC" }]; // ~500 ft
-    expect(ceilingFromClouds(clouds)).toBeCloseTo(500, 0);
+    const clouds = [{ base: 500, cover: "OVC" }];
+    expect(ceilingFromClouds(clouds)).toBe(500);
   });
 
   it("counts VV (vertical visibility) as a ceiling", () => {
-    const clouds = [{ base: 30.48, amount: "VV" }]; // ~100 ft
-    expect(ceilingFromClouds(clouds)).toBeCloseTo(100, 0);
+    const clouds = [{ base: 100, cover: "VV" }];
+    expect(ceilingFromClouds(clouds)).toBe(100);
   });
 
   it("is case-insensitive on layer type", () => {
-    const clouds = [{ base: 305, amount: "bkn" }];
-    expect(ceilingFromClouds(clouds)).toBeCloseTo(1000, -1);
+    const clouds = [{ base: 1000, cover: "bkn" }];
+    expect(ceilingFromClouds(clouds)).toBe(1000);
   });
 });
 

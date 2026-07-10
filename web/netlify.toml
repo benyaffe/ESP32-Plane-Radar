@@ -20,3 +20,12 @@
   to = "/.netlify/functions/adsb"
   status = 200
   force = true
+
+# METAR proxy — aviationweather.gov doesn't send CORS headers so the
+# browser can't call it direct. netlify/functions/metar.mjs does the
+# fetch server-side and adds Access-Control-Allow-Origin.
+[[redirects]]
+  from = "/api/metar"
+  to = "/.netlify/functions/metar"
+  status = 200
+  force = true

@@ -84,7 +84,7 @@ Browser port so friends can try the interface without hardware. Same visual lang
 - **Vite + TypeScript** — no framework; ~7 KB of gzipped JS renders the whole thing.
 - **`scripts/build_web_data.py`** — bakes the same Natural Earth + OurAirports sources into JSON. Ships high-detail Bay Area layers (10 m Natural Earth) plus a CONUS-wide 50 m base so *any* US airport picked in the typeahead gets some map context.
 - **`web/functions/api/adsb.ts`** — Cloudflare Pages Function that proxies `opendata.adsb.fi` (no CORS on the upstream). Cached 5 s at the edge. In local dev, a small Vite middleware forwards the same path directly.
-- **Weather** — talks straight to `api.weather.gov` from the browser (that endpoint *does* send CORS headers, so no proxy needed).
+- **Weather** — talks to `aviationweather.gov` through a small Netlify Function proxy at `/api/metar` (aviationweather doesn't send CORS headers, so the browser can't call it direct). Same upstream the firmware uses.
 - **Typeahead** — 828-airport index, ranks exact/prefix ICAO+IATA above name matches.
 - **Touch + click + keyboard** — one central `Tap` discriminator handles all three input modes; single/double/triple map to range/focus/weather just like on hardware. Layer toggles are clickable buttons on mobile, `1`–`5` keys on desktop.
 - **Deploy** — one Cloudflare account, one Pages project, one CNAME. See [`web/DEPLOY.md`](web/DEPLOY.md) for the step-by-step.
