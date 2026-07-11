@@ -78,3 +78,17 @@ export function refreshIfStale(): Promise<void> {
     .finally(() => { inFlight = null; });
   return inFlight;
 }
+
+// Drop the TTL cache. Called from the state.home subscriber so a home
+// move triggers a fresh fetch on the next refreshIfStale() instead of
+// serving the old location's reading for up to 15 minutes.
+export function invalidate(): void {
+  cache = {
+    tempF: NaN,
+    windKts: NaN,
+    windDegFrom: NaN,
+    baroInHg: NaN,
+    valid: false,
+  };
+  lastFetchMs = 0;
+}

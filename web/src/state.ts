@@ -245,6 +245,26 @@ export function setView(v: ViewMode): void {
   notify();
 }
 
+// Atomic view + focus change: land on the target focus and view in one
+// mutation, notify once. Called from the tap-cycle handler so cycling
+// from cockpit back to a radar focus doesn't fire two notifies with
+// mismatched (view, center) mid-transition (which would race the
+// tile/aircraft refetch subscribers).
+export function setViewAndFocus(v: ViewMode, focusIdx: number): void {
+  state.view = v;
+  const ring = state.focusRing;
+  if (focusIdx >= 0 && focusIdx < ring.length) {
+    const fp = ring[focusIdx];
+    state.focusIdx = focusIdx;
+    state.centerLat = fp.lat;
+    state.centerLon = fp.lon;
+    state.centerLabel = fp.label;
+    state.rangeIdx = fp.defaultRangeIdx;
+  }
+  persistSession();
+  notify();
+}
+
 export function toggleView(): void {
   // Cycle: radar → weather → cockpit → radar. Kept for keyboard tests /
   // future toggle wiring; the actual tap dispatcher lives in main.ts.
@@ -278,6 +298,9 @@ export function saveHome(home: HomeLocation): void {
   if (homeSlot) {
     homeSlot.lat = home.lat;
     homeSlot.lon = home.lon;
+    // Only re-center immediately if the user is currently looking at the
+    // Home slot. Otherwise the fresh coords sit on the ring and take
+    // effect the next time the tap-cycle lands on Home.
     if (state.focusIdx >= 0 && state.focusRing[state.focusIdx]?.isHome) {
       state.centerLat = home.lat;
       state.centerLon = home.lon;

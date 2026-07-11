@@ -7,29 +7,22 @@ import {
   state,
   subscribe,
   cycleRange,
-  cycleFocus,
   setView,
+  setViewAndFocus,
 } from "./state";
 import { makeTapDiscriminator, type Tap } from "./input";
 import { mountSettings } from "./settings";
 import { drawWeatherView } from "./weatherView";
 import { drawCockpitView } from "./cockpitView";
 import { refreshIfStale, rebuildStations, invalidate as invalidateMetar } from "./weather";
-import { refreshIfStale as refreshOutdoorTemp } from "./outdoorTemp";
-import { fetchAircraft } from "./aircraft";
+import { refreshIfStale as refreshOutdoorTemp, invalidate as invalidateOutdoorTemp } from "./outdoorTemp";
+import { fetchAircraft, clearAircraft } from "./aircraft";
 import { RANGE_PRESETS } from "./theme";
-import { loadTilesForView } from "./tileFetch";
-import type { Tile } from "./tile";
+import { ensureTiles as ensureTilesForView, currentTiles } from "./viewTiles";
 
 const KM_PER_NM = 1.852;
 
 let indexData: IndexData | null = null;
-// Currently-loaded tile set for whichever view is up. Reassigned when
-// the center of the active view crosses into a different tile family;
-// individual tile fetches are memoized inside tileFetch so pans across
-// already-seen tiles never hit the network twice.
-let tiles: Tile[] = [];
-let tilesKey = "";
 // While in weather or cockpit mode, we repaint once/second — the weather
 // view's "n min ago" freshness label ticks up and the cockpit view's
 // second-sweep animates. Cleared when returning to radar.
@@ -75,11 +68,11 @@ function requestFrame(): void {
     if (!indexData) {
       drawLoadingState(bctx, "loading map…");
     } else if (state.view === "weather") {
-      drawWeatherView(bctx, tiles);
+      drawWeatherView(bctx, currentTiles());
     } else if (state.view === "cockpit") {
       drawCockpitView(bctx);
     } else {
-      renderFrame(bctx, tiles);
+      renderFrame(bctx, currentTiles());
     }
     // Single blit — the visible canvas never shows a partial frame.
     visible.clearRect(0, 0, 240, 240);
@@ -107,29 +100,12 @@ function currentViewGeometry(): { lat: number; lon: number; radiusKm: number } {
 }
 
 // Refetch tiles when the active view's center/radius has moved into a
-// combination we haven't loaded yet. Tile fetches are memoized inside
-// tileFetch, so this is only a network round-trip when the tile set
-// actually changes.
-let tilesFetchInFlight: Promise<void> | null = null;
+// combination we haven't loaded yet. The supersede logic lives in
+// viewTiles.ts; here we just wire it to state and repaint on updates.
 async function ensureTiles(): Promise<void> {
   const g = currentViewGeometry();
-  // Cheap change detector: same key → same tile list → nothing to do.
-  const key = `${state.view}:${g.lat.toFixed(3)}:${g.lon.toFixed(3)}:${g.radiusKm.toFixed(1)}`;
-  if (key === tilesKey && tiles.length > 0) return;
-  if (tilesFetchInFlight) return tilesFetchInFlight;
-  tilesFetchInFlight = (async () => {
-    try {
-      const next = await loadTilesForView(g.lat, g.lon, g.radiusKm);
-      tiles = next;
-      tilesKey = key;
-      requestFrame();
-    } catch (err) {
-      console.error("tile fetch failed", err);
-    } finally {
-      tilesFetchInFlight = null;
-    }
-  })();
-  return tilesFetchInFlight;
+  const updated = await ensureTilesForView(state.view, g.lat, g.lon, g.radiusKm);
+  if (updated) requestFrame();
 }
 
 // Central gesture handler — one place so canvas taps, hint buttons, and
@@ -165,12 +141,12 @@ function advanceRing(): void {
     : Math.max(0, state.focusIdx);
   const next = (currentPos + 1) % ringLen;
   if (next < state.focusRing.length) {
-    // Land on a radar focus slot. cycleFocus() advances by 1; call it
-    // enough times to reach `next` from the current focus.
-    if (state.view !== "radar") setView("radar");
-    const delta = (next - Math.max(0, state.focusIdx) + state.focusRing.length)
-                    % state.focusRing.length;
-    for (let i = 0; i < delta; i++) cycleFocus();
+    // Land on a radar focus slot. setViewAndFocus notifies once so the
+    // subscribers (tile refetch, aircraft poll, aircraft-clear-on-center-
+    // change) all run with the final center — earlier iterations of this
+    // code called setView + N × cycleFocus and produced 1+delta notifies
+    // per double-tap, which triggered a race that blanked the map.
+    setViewAndFocus("radar", next);
   } else if (next === state.focusRing.length) {
     enterWeather();
   } else {
@@ -232,24 +208,45 @@ subscribe(() => {
 
 // Aircraft fetch loop. Fires immediately on center/range change plus
 // every 3 s while the radar view is active. Skipped in non-radar modes.
-let aircraftFetchInFlight = false;
+// No in-flight boolean guard: overlapping fetches are safe now that
+// aircraft.ts uses a generation counter — only the last-started fetch
+// writes s_aircraft, so rapid state changes don't drop refetches.
 let modeFlipTimer: number | null = null;
 async function pollAircraft(): Promise<void> {
   if (state.view !== "radar") return;
-  if (aircraftFetchInFlight) return;
-  aircraftFetchInFlight = true;
-  try {
-    const nm = RANGE_PRESETS[state.rangeIdx].nm * 1.1;
-    await fetchAircraft(state.centerLat, state.centerLon, nm);
-    requestFrame();
-    if (modeFlipTimer !== null) clearTimeout(modeFlipTimer);
-    modeFlipTimer = window.setTimeout(() => requestFrame(), 1500);
-  } finally {
-    aircraftFetchInFlight = false;
-  }
+  const nm = RANGE_PRESETS[state.rangeIdx].nm * 1.1;
+  await fetchAircraft(state.centerLat, state.centerLon, nm);
+  requestFrame();
+  if (modeFlipTimer !== null) clearTimeout(modeFlipTimer);
+  modeFlipTimer = window.setTimeout(() => requestFrame(), 1500);
 }
 subscribe(() => { void pollAircraft(); });
 setInterval(() => { void pollAircraft(); }, 3000);
+
+// Clear cached aircraft the moment the radar center moves. Without this,
+// the old-center list lingers until the next fetch resolves — those
+// planes project off the new-center disc and get filtered out silently,
+// so the user sees "no planes" for a beat regardless. Clearing up front
+// makes the transient state honest.
+let lastCenterKey = "";
+subscribe(() => {
+  const k = `${state.centerLat}:${state.centerLon}`;
+  if (k === lastCenterKey) return;
+  lastCenterKey = k;
+  clearAircraft();
+  requestFrame();
+});
+
+// Outdoor temperature is keyed on state.home. When home moves, the
+// 15-minute TTL cache would otherwise show the old location's reading
+// until it expires.
+let lastHomeKey = "";
+subscribe(() => {
+  const k = `${state.home.lat}:${state.home.lon}`;
+  if (k === lastHomeKey) return;
+  lastHomeKey = k;
+  invalidateOutdoorTemp();
+});
 
 function mountCanvasGestures(canvas: HTMLCanvasElement): void {
   const disc = makeTapDiscriminator(handleGesture);
