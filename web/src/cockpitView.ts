@@ -212,9 +212,16 @@ function drawBaroIndicator(ctx: CanvasRenderingContext2D, wx: WxReading): void {
   ctx.fillText(val, CENTER_X, blockCy);
 }
 
+// "20C 68F" — Celsius first, then Fahrenheit. Matches the firmware's
+// drawSensorBlock so both stacks read the same. "--C --F" for missing.
+function formatTempCF(tempF: number, valid: boolean): string {
+  if (!valid || !isFinite(tempF)) return "--C --F";
+  const c = (tempF - 32) * 5 / 9;
+  return `${Math.round(c)}C ${Math.round(tempF)}F`;
+}
+
 function drawSensorBlock(ctx: CanvasRenderingContext2D, wx: WxReading): void {
-  const oat = wx.valid ? `${Math.round(wx.tempF)}F` : "--F";
-  drawLabelValue(ctx, "OAT", oat, 155, TEMP);
+  drawLabelValue(ctx, "OAT", formatTempCF(wx.tempF, wx.valid), 155, TEMP);
   // Web preview has no BME280 — CABIN/RH lines omitted, matching the
   // firmware behavior when no sensor is attached. Slot at y=167-179
   // reserved for a future cabin/RH readout so the layout stays stable

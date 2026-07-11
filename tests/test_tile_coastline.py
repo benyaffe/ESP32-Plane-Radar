@@ -110,9 +110,18 @@ def test_build_coastline_tiles_coarser_zooms_have_fewer_points():
     assert n3 <= n5
 
 
-def test_build_coastline_tiles_uses_baseline_tolerance_at_finest_zoom():
-    """Regression contract: the finest zoom level must not simplify
-    below the coastline quality baseline (0.002°). Locking this in
-    prevents a silent 'let's ship less data' change from degrading the
-    map."""
-    assert ts.SIMPLIFY_TOL_DEG[max(ts.ZOOM_LEVELS)] == pytest.approx(0.002)
+def test_build_coastline_tiles_keeps_finest_zoom_tighter_than_medium():
+    """Regression contract: the finest zoom level's DP tolerance must
+    stay tighter than the medium level. Was pinned at 0.002° when the
+    map only had ocean coastlines; tightened to 0.0005° when rivers
+    were folded into the Coast section (river bends need finer
+    resolution at 5-25 nm radar zoom). This test guards direction of
+    change — no silent 'ship less data' regression."""
+    fine = ts.SIMPLIFY_TOL_DEG[max(ts.ZOOM_LEVELS)]
+    medium = ts.SIMPLIFY_TOL_DEG[5]
+    assert fine < medium, (
+        f"finest zoom tol {fine}° must be tighter than medium {medium}°"
+    )
+    assert fine <= 0.002, (
+        f"finest zoom tol {fine}° must not exceed the historical 0.002° baseline"
+    )

@@ -259,13 +259,17 @@ subscribe(() => {
 
 // Outdoor temperature is keyed on state.home. When home moves, the
 // 15-minute TTL cache would otherwise show the old location's reading
-// until it expires.
+// until it expires. Also kick a fresh fetch so the new home's tz
+// offset lands promptly (the cockpit view's HH:MM depends on that
+// offset — without an immediate refetch, a URL-driven ?home=... would
+// display in UTC until the user cycled views).
 let lastHomeKey = "";
 subscribe(() => {
   const k = `${state.home.lat}:${state.home.lon}`;
   if (k === lastHomeKey) return;
   lastHomeKey = k;
   invalidateOutdoorTemp();
+  refreshOutdoorTemp().then(() => requestFrame()).catch(() => { /* no-op */ });
 });
 
 function mountCanvasGestures(canvas: HTMLCanvasElement): void {

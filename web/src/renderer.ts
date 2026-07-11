@@ -67,6 +67,36 @@ function drawLand(ctx: CanvasRenderingContext2D, view: ViewFrame, tiles: Tile[])
   ctx.fill("evenodd");
 }
 
+// Lake fill: paints tile Water polygons in the background color so they
+// read as water carved into land. Natural Earth 10m lakes; tile format
+// already carries these in Section::Water — nobody drew them until now.
+// Rivers live in the Coast section (see build_tiles.py) and get drawn
+// by drawCoastline in coastline color.
+function drawWater(ctx: CanvasRenderingContext2D, view: ViewFrame, tiles: Tile[]): void {
+  if (!state.layers.land) return;  // hidden alongside land — same "map layer"
+  ctx.fillStyle = COLORS.background;
+  ctx.beginPath();
+  for (const tile of tiles) {
+    for (const ring of tile.water) {
+      if (ring.length < 3) continue;
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      const pts: [number, number][] = new Array(ring.length);
+      for (let i = 0; i < ring.length; i++) {
+        const [lon, lat] = ring[i];
+        const [x, y] = project(view, lat, lon);
+        pts[i] = [x, y];
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+      if (maxX < 0 || minX >= SIZE || maxY < 0 || minY >= SIZE) continue;
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+    }
+  }
+  ctx.fill("evenodd");
+}
+
 function drawCoastline(ctx: CanvasRenderingContext2D, view: ViewFrame, tiles: Tile[]): void {
   if (!state.layers.coast) return;
   ctx.strokeStyle = COLORS.coastline;
@@ -180,7 +210,8 @@ export function renderFrame(ctx: CanvasRenderingContext2D, tiles: Tile[]): void 
   fillBackground(ctx);
   clipToOuterDisc(ctx);
   drawLand(ctx, view, tiles);
-  drawCoastline(ctx, view, tiles);
+  drawWater(ctx, view, tiles);      // lakes: cut back to background color over land
+  drawCoastline(ctx, view, tiles);  // ocean coastline + rivers (both polylines)
   unclip(ctx);
 
   drawRings(ctx);

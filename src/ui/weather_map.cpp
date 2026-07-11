@@ -237,6 +237,33 @@ void drawLand(lgfx::LGFXBase& gfx) {
   }
 }
 
+void drawWater(lgfx::LGFXBase& gfx) {
+  // Lakes fill in the background color so they read as water carved
+  // into land. Same source (Section::Water = ne_10m_lakes) as the
+  // radar-view lake overlay.
+  const uint16_t color = radar::kColorBackground;
+  TileId tiles[4];
+  const size_t nt = visibleTiles(tiles);
+  for (size_t ti = 0; ti < nt; ++ti) {
+    const auto bytes = data::tile::store().get(data::tile::kRenderZoom,
+                                                tiles[ti].x, tiles[ti].y);
+    data::tile::TileReader reader;
+    if (!reader.init(bytes.data, bytes.size)) continue;
+    uint32_t sec_len = 0;
+    const uint8_t* p =
+        reader.sectionBegin(data::tile::Section::Water, &sec_len);
+    if (p == nullptr || sec_len == 0) continue;
+    const uint8_t* end = p + sec_len;
+    uint16_t poly_count = 0;
+    if (!data::tile::TileReader::readSectionCount(&p, end, &poly_count)) continue;
+    for (uint16_t i = 0; i < poly_count; ++i) {
+      data::tile::PolylineView view;
+      if (!data::tile::TileReader::readPolyline(&p, end, &view)) break;
+      drawTileLandPolygon(gfx, view, color);
+    }
+  }
+}
+
 void drawCoast(lgfx::LGFXBase& gfx) {
   const uint16_t color = tft.color565(radar::kBgR + 40, radar::kBgG + 60,
                                       radar::kBgB + 40);
@@ -467,7 +494,8 @@ void draw() {
   placeLabels();
   gfx.fillScreen(radar::kColorBackground);
   drawLand(gfx);
-  drawCoast(gfx);
+  drawWater(gfx);   // lakes over land
+  drawCoast(gfx);   // ocean coast + rivers over both
   drawFreshness(gfx);
   configureLabelFont(gfx);   // drawFreshness stomps text size
   drawStations(gfx);

@@ -199,10 +199,17 @@ void drawSensorBlock(LGFX_Sprite& g) {
   const services::outdoor_temp::Reading oat = services::outdoor_temp::cached();
   const services::env_sensor::Reading env = services::env_sensor::read();
 
+  // "20C 68F" — Celsius first (per pilot convention: METARs report in C),
+  // Fahrenheit second for the US-market default read. Web preview mirrors
+  // this format in web/src/cockpitView.ts formatTempCF.
   char oat_val[16];
-  if (oat.valid) std::snprintf(oat_val, sizeof(oat_val), "%.0fF",
-                               std::round(oat.tempF));
-  else           std::snprintf(oat_val, sizeof(oat_val), "--F");
+  if (oat.valid) {
+    const float cval = (oat.tempF - 32.0f) * 5.0f / 9.0f;
+    std::snprintf(oat_val, sizeof(oat_val), "%.0fC %.0fF",
+                  std::round(cval), std::round(oat.tempF));
+  } else {
+    std::snprintf(oat_val, sizeof(oat_val), "--C --F");
+  }
   drawLabelValue(g, "OAT", oat_val, 155, colGray(), colTemp());
 
   // OAT moved down 7 px to y=155 to make room for the Zulu line at 142
@@ -214,8 +221,9 @@ void drawSensorBlock(LGFX_Sprite& g) {
   if (env.valid) {
     char cabin_val[16];
     char rh_val[16];
-    std::snprintf(cabin_val, sizeof(cabin_val), "%.0fF",
-                  std::round(env.tempF));
+    const float cabin_c = (env.tempF - 32.0f) * 5.0f / 9.0f;
+    std::snprintf(cabin_val, sizeof(cabin_val), "%.0fC %.0fF",
+                  std::round(cabin_c), std::round(env.tempF));
     std::snprintf(rh_val, sizeof(rh_val), "%.0f%%",
                   std::round(env.humidityPct));
     drawLabelValue(g, "CABIN", cabin_val, 168, colGray(), colTemp());

@@ -50,7 +50,13 @@ function buildUrl(lat: number, lon: number): string {
 }
 
 async function doFetch(): Promise<void> {
-  const url = buildUrl(state.home.lat, state.home.lon);
+  // Snapshot home at URL-build time so a mid-flight state.home change
+  // (URL override, settings save) can't be overwritten by the stale
+  // response. The home-change subscriber in main.ts invalidate()s and
+  // triggers a fresh refreshIfStale — that follow-up owns the display.
+  const fetchLat = state.home.lat;
+  const fetchLon = state.home.lon;
+  const url = buildUrl(fetchLat, fetchLon);
   const resp = await fetch(url, { cache: "no-store" });
   if (!resp.ok) throw new Error(`open-meteo HTTP ${resp.status}`);
   const doc = (await resp.json()) as {
@@ -62,6 +68,12 @@ async function doFetch(): Promise<void> {
     };
     utc_offset_seconds?: unknown;
   };
+  if (state.home.lat !== fetchLat || state.home.lon !== fetchLon) {
+    // Home moved during the fetch — silently drop this response so we
+    // don't cache old-home data. The follow-up refetch (kicked by the
+    // home-change subscriber) delivers the right data.
+    return;
+  }
   const cur = doc.current;
   if (cur == null || typeof cur.temperature_2m !== "number") {
     throw new Error("open-meteo: missing temperature_2m");

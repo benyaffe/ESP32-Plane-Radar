@@ -40,6 +40,12 @@ SOURCES = {
     "land": f"{NE}/ne_10m_land.geojson",
     "islands": f"{NE}/ne_10m_minor_islands.geojson",
     "lakes": f"{NE}/ne_10m_lakes.geojson",
+    # Inland rivers — folded into the Coast section (both are polylines
+    # rendered with the same coastline-color pass on both firmware and
+    # web). Without this feed the tiles have no inland water at all —
+    # Willamette River through Corvallis, Sacramento River delta, etc.
+    # never render.
+    "rivers": f"{NE}/ne_10m_rivers_lake_centerlines.geojson",
 }
 OA = "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main"
 AIRPORTS_URL = f"{OA}/airports.csv"
@@ -77,6 +83,7 @@ def build_all_tiles(
     airport_rows: list[dict],
     runway_rows: list[dict],
     iap_icaos: set[str],
+    river_features: list[dict] | None = None,
     zoom_levels: tuple[int, ...] = ts.ZOOM_LEVELS,
 ) -> list[tf.Tile]:
     """Run every per-layer builder and merge results into complete tiles.
@@ -89,6 +96,15 @@ def build_all_tiles(
     the pipeline output is byte-identical for byte-identical inputs.
     """
     coast = tc.build_coastline_tiles(coast_features, zoom_levels)
+    # Rivers piggyback on the Coast section: same LineString geometry,
+    # same "draw as thin coastline-color polyline" render path on both
+    # firmware (coastline_overlay.cpp) and web (drawCoastline in
+    # renderer.ts). Zero new format/renderer surface — the tradeoff is
+    # rivers render in the coastline color instead of a distinct blue.
+    if river_features:
+        river_tiles = tc.build_coastline_tiles(river_features, zoom_levels)
+        for key, polys in river_tiles.items():
+            coast.setdefault(key, []).extend(polys)
     land = tp.build_polygon_tiles(land_features, zoom_levels)
     for key, polys in tp.build_polygon_tiles(island_features, zoom_levels).items():
         land.setdefault(key, []).extend(polys)
@@ -160,6 +176,7 @@ def main() -> None:
         land_features=load_geojson_features(SOURCES["land"]),
         island_features=load_geojson_features(SOURCES["islands"]),
         water_features=load_geojson_features(SOURCES["lakes"]),
+        river_features=load_geojson_features(SOURCES["rivers"]),
         airport_rows=fetch_csv_rows(AIRPORTS_URL),
         runway_rows=runway_rows,
         iap_icaos=iap_icaos,

@@ -40,6 +40,12 @@ bool s_ever_attempted = false;
 // URL includes `&timezone=auto`, which we now do. Cockpit uses this
 // to render home-local HH:MM without embedding a lat→IANA table.
 long s_utc_offset_sec = 0;
+// Home lat/lon that the last successful fetch was made against. Used
+// by loop() to detect a home move (WiFi portal / config server save)
+// and force an immediate refetch so the clock's tz offset updates in
+// seconds rather than waiting out the 15-minute TTL.
+double s_last_fetch_lat = 0.0;
+double s_last_fetch_lon = 0.0;
 
 void buildUrl(char* url, size_t len) {
   std::snprintf(url, len,
@@ -99,6 +105,8 @@ bool ingestPayload(const char* body, size_t body_len) {
   }
   s_valid = true;
   s_last_fetch_ms = millis();
+  s_last_fetch_lat = services::location::lat();
+  s_last_fetch_lon = services::location::lon();
   return true;
 }
 
@@ -161,14 +169,26 @@ void init() {
   s_last_attempt_ms = 0;
   s_ever_attempted = false;
   s_utc_offset_sec = 0;
+  s_last_fetch_lat = 0.0;
+  s_last_fetch_lon = 0.0;
 }
 
 void loop() {
   const unsigned long now = millis();
   const unsigned long since_attempt = now - s_last_attempt_ms;
   const bool first = !s_ever_attempted;
-  const bool ok_to_retry = s_valid ? (since_attempt >= kFetchIntervalMs)
-                                   : (since_attempt >= 30000UL);
+  // Detect home moves (WiFi portal / emulator config save) — if the
+  // location has changed since our last successful fetch, force a
+  // refresh regardless of the TTL so the cockpit's tz offset updates
+  // in seconds rather than waiting out the 15-minute cadence.
+  const bool home_moved =
+      s_valid &&
+      (services::location::lat() != s_last_fetch_lat ||
+       services::location::lon() != s_last_fetch_lon);
+  const bool ok_to_retry = home_moved
+                               ? true
+                               : (s_valid ? (since_attempt >= kFetchIntervalMs)
+                                          : (since_attempt >= 30000UL));
   if (first && now < kFirstDelayMs) return;
   if (!first && !ok_to_retry) return;
   s_last_attempt_ms = now;

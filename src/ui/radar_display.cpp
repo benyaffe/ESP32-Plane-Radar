@@ -13,6 +13,7 @@
 #include "services/radar_location.h"
 #include "services/focus_points.h"
 #include "ui/coastline_overlay.h"
+#include "ui/water_overlay.h"
 #include "ui/label_layout.h"
 #include "ui/land_overlay.h"
 #include "ui/layer_style.h"
@@ -1236,12 +1237,18 @@ void drawStaticGrid(Gfx& gfx) {
   // Triangles may spill past the outer ring; the fillArc mask below then
   // paints the ring's exterior back to background, so the disc reads clean.
   land::draw(gfx);
+  // Lakes: paint water polygons back to background over the land tint
+  // so they read as bodies of water carved into land. Global data from
+  // ne_10m_lakes (Section::Water in the tile pyramid).
+  water::draw(gfx);
   gfx.fillArc(cx, cy, radar::kSize, grid_r + 1, 0, 360,
               radar::kColorBackground);
   drawRings(cx, cy, grid_r);
   drawCrosshairs(cx, cy, grid_r, radar::kColorGrid);
   // Coastline sits over the land tint (delineates the boundary) and under
-  // labels/aircraft. No labels to register.
+  // labels/aircraft. Also carries rivers (folded into Section::Coast by
+  // build_tiles.py — same polyline geometry, same render path). No
+  // labels to register.
   coastline::draw(gfx);
   // Order matters: airport labels register bounding rects with labels::,
   // then the scale label dodges around them. (N/E/S/W cardinals were

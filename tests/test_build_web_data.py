@@ -68,11 +68,37 @@ def test_index_sorts_large_hubs_first(monkeypatch):
 
 
 def test_index_row_layout(monkeypatch):
+    # SAMPLE_ROWS is reused for airports+runways+navaids by the fetch_csv
+    # mock; runway rows don't have `lighted`/`airport_ident`, and navaid
+    # rows don't have `associated_airport`, so iap_idents_from_openflight_data
+    # returns an empty set → every row's IAP flag is 0.
     monkeypatch.setattr(bwd, "fetch_csv", lambda _url: SAMPLE_ROWS)
     idx = bwd.build_airport_index()
     sfo = next(row for row in idx if row[0] == "KSFO")
-    # [ident, iata, city, name, lat, lon]
-    assert sfo == ["KSFO", "SFO", "San Francisco", "SFO Intl", 37.6188, -122.375]
+    # [ident, iata, city, name, lat, lon, iap]
+    assert sfo == ["KSFO", "SFO", "San Francisco", "SFO Intl", 37.6188, -122.375, 0]
+
+
+def test_index_iap_flag_set_by_lighted_runway(monkeypatch):
+    # Different fixtures per URL: airports = SAMPLE_ROWS, runways = one
+    # lighted non-closed runway for KSFO. iap_idents_from_openflight_data
+    # should tag KSFO; KHAF (no runway row) stays 0.
+    runway_rows = [
+        {"airport_ident": "KSFO", "lighted": "1", "closed": "0"},
+    ]
+
+    def fake_fetch(url):
+        if "airports.csv" in url:
+            return SAMPLE_ROWS
+        if "runways.csv" in url:
+            return runway_rows
+        return []  # navaids
+
+    monkeypatch.setattr(bwd, "fetch_csv", fake_fetch)
+    idx = bwd.build_airport_index()
+    by_ident = {row[0]: row for row in idx}
+    assert by_ident["KSFO"][6] == 1
+    assert by_ident["KHAF"][6] == 0
 
 
 def test_lat_lon_rounded_to_5dp(monkeypatch):

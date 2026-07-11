@@ -15,11 +15,14 @@ def test_zoom_levels_contract_from_plan():
     assert ts.ZOOM_LEVELS == (3, 5, 7)
 
 
-def test_baseline_tolerance_matches_coastline_quality_contract():
-    """Finest zoom must render at the plan's 0.002° baseline (~222 m).
-    Lock inherited from the retired per-focus baker — the tile pipeline
-    is now the sole source of truth for this tolerance."""
-    assert ts.SIMPLIFY_TOL_DEG[7] == 0.002
+def test_baseline_tolerance_at_finest_zoom_stays_at_or_tighter_than_coastline_baseline():
+    """Finest zoom must render at OR FINER THAN the plan's 0.002° coastline
+    baseline (~222 m). Was tightened to 0.0005° (~55 m) once rivers
+    were folded into the Coast section — tight river bends
+    (Willamette through Corvallis, etc.) need finer resolution at the
+    5-25 nm radar zoom than ocean coastline alone did. This guard
+    prevents a silent 'ship less data' regression."""
+    assert ts.SIMPLIFY_TOL_DEG[7] <= 0.002
 
 
 def test_coarser_zoom_uses_looser_tolerance():

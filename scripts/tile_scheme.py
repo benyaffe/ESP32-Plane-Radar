@@ -14,19 +14,24 @@ from dataclasses import dataclass
 from math import cos, floor, radians
 
 # The three baked zoom levels + the DP simplification tolerance at each.
-# The finest level (z=7) matches the coastline quality baseline from the
-# refactor plan — 0.002 degrees ≈ 222 m. Coarser levels drop detail to
-# keep tile size manageable at continent / world scales.
+# Coarser levels drop detail to keep tile size manageable at continent /
+# world scales.
 #
 # Tile widths at each zoom (at the equator, degrees):
 #   z=3 → 45.0°  ≈ 5000 km
 #   z=5 → 11.25° ≈ 1250 km
 #   z=7 →  2.8°  ≈  310 km  (comfortably covers the widest 25 nm radar view)
+#
+# z=7 tolerance was tightened from 0.002 → 0.0005 (≈222 m → 55 m) so
+# tight river bends — Willamette through Corvallis, Sacramento River
+# delta — stay recognizable at the 5-25 nm radar zoom. Tile size grows
+# a few KB per z=7 tile with rivers folded in, still well under the
+# 128 KB per-tile cap in services::tile_cache.
 ZOOM_LEVELS: tuple[int, ...] = (3, 5, 7)
 SIMPLIFY_TOL_DEG: dict[int, float] = {
     3: 0.02,
     5: 0.005,
-    7: 0.002,
+    7: 0.0005,
 }
 
 

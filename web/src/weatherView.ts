@@ -239,6 +239,34 @@ function drawTileLand(ctx: CanvasRenderingContext2D, fit: Fit,
   ctx.fill("evenodd");
 }
 
+function drawTileWater(ctx: CanvasRenderingContext2D, fit: Fit,
+                       tiles: Tile[]): void {
+  // Lakes: fill in background color so they read as water carved into
+  // land. Matches drawWater on the radar view — same source data
+  // (ne_10m_lakes via Section::Water), same rendering approach.
+  ctx.fillStyle = COLORS.background;
+  ctx.beginPath();
+  for (const tile of tiles) {
+    for (const ring of tile.water) {
+      if (ring.length < 3) continue;
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      const pts: [number, number][] = new Array(ring.length);
+      for (let i = 0; i < ring.length; i++) {
+        const [lon, lat] = ring[i];
+        const [x, y] = project(fit, lat, lon);
+        pts[i] = [x, y];
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+      if (maxX < 0 || minX >= SIZE || maxY < 0 || minY >= SIZE) continue;
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+    }
+  }
+  ctx.fill("evenodd");
+}
+
 function drawTileCoast(ctx: CanvasRenderingContext2D, fit: Fit,
                        tiles: Tile[]): void {
   ctx.strokeStyle = COLORS.coastline;
@@ -338,7 +366,8 @@ export function drawWeatherView(
   ctx.fillStyle = COLORS.background;
   ctx.fillRect(0, 0, SIZE, SIZE);
   drawTileLand(ctx, fit, tiles);
-  drawTileCoast(ctx, fit, tiles);
+  drawTileWater(ctx, fit, tiles);   // lakes over land
+  drawTileCoast(ctx, fit, tiles);   // coast + rivers over both
   drawFreshness(ctx);
   ctx.font = LABEL_FONT;   // drawFreshness stomps the font
   ctx.textAlign = "center";
