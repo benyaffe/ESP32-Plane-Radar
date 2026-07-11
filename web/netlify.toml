@@ -29,3 +29,11 @@
   to = "/.netlify/functions/metar"
   status = 200
   force = true
+
+# Geocoding proxy — Nominatim (OpenStreetMap). Sets the required
+# User-Agent server-side and lets the Netlify CDN cache per query.
+[[redirects]]
+  from = "/api/geocode"
+  to = "/.netlify/functions/geocode"
+  status = 200
+  force = true

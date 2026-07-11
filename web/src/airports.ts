@@ -2,6 +2,7 @@
 // Used by the airport typeahead in web/src/settings.ts.
 
 import type { AirportIndexRow } from "./data";
+import { distanceNm } from "./weather";
 
 // Case-insensitive substring match on ICAO, IATA, city, or name.
 // Ranks exact prefix matches on ICAO/IATA first, then substring hits,
@@ -30,4 +31,31 @@ export function search(index: AirportIndexRow[], query: string, limit = 8): Airp
   }
   scored.sort((a, b) => b[0] - a[0]);
   return scored.slice(0, limit).map(([, row]) => row);
+}
+
+export interface NearestAirport {
+  icao: string;
+  lat: number;
+  lon: number;
+  distanceNm: number;
+}
+
+/** Nearest airport in the index whose IAP flag (column 6, 0/1) is 1.
+ *  Returns null if the index has no IAP-capable entries. O(N) scan;
+ *  cheap at the ~5-6k index size and once-per-second call cadence. */
+export function nearestIapAirport(
+  index: AirportIndexRow[],
+  lat: number,
+  lon: number,
+): NearestAirport | null {
+  let best: NearestAirport | null = null;
+  for (const row of index) {
+    const [icao, , , , rowLat, rowLon, iap] = row;
+    if (iap !== 1) continue;
+    const d = distanceNm(lat, lon, rowLat, rowLon);
+    if (best === null || d < best.distanceNm) {
+      best = { icao, lat: rowLat, lon: rowLon, distanceNm: d };
+    }
+  }
+  return best;
 }

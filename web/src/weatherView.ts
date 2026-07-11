@@ -261,17 +261,19 @@ function drawTileCoast(ctx: CanvasRenderingContext2D, fit: Fit,
 }
 
 function drawFreshness(ctx: CanvasRenderingContext2D): void {
-  const last = lastUpdateMs();
-  let text = "no data";
-  if (last > 0) {
-    const ageS = Math.round((Date.now() - last) / 1000);
-    text = ageS < 60 ? `${ageS}s ago` : `${Math.floor(ageS / 60)}m ago`;
-  }
   ctx.font = "9px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.fillStyle = COLORS.grid;
-  ctx.fillText(text, CENTER_X, 8);
+  ctx.fillText(formatFreshness(lastUpdateMs()), CENTER_X, 8);
+}
+
+// Exported so the cockpit view can render the same freshness label above
+// its wind block. Rounds to whole minutes; "0 min ago" for a fresh fetch.
+export function formatFreshness(last: number, nowMs = Date.now()): string {
+  if (last <= 0) return "no data";
+  const mins = Math.max(0, Math.floor((nowMs - last) / 60_000));
+  return `${mins} min ago`;
 }
 
 function drawStations(

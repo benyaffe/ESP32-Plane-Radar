@@ -56,3 +56,24 @@ export function segmentOnScreen(x0: number, y0: number, x1: number, y1: number):
   if (maxY < 0 || minY >= 240) return false;
   return true;
 }
+
+/** Great-circle initial bearing from (lat1,lon1) to (lat2,lon2), in
+ *  degrees clockwise from true north, normalized to [0, 360). */
+export function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = Math.PI / 180;
+  const phi1 = lat1 * toRad;
+  const phi2 = lat2 * toRad;
+  const dLon = (lon2 - lon1) * toRad;
+  const y = Math.sin(dLon) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) -
+            Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);
+  const brg = (Math.atan2(y, x) * 180) / Math.PI;
+  return (brg + 360) % 360;
+}
+
+/** Bin a bearing in degrees to one of 8 compass directions. */
+export function compass8(deg: number): "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW" {
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] as const;
+  const idx = Math.round(((deg % 360 + 360) % 360) / 45) % 8;
+  return dirs[idx];
+}

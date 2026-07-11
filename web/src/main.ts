@@ -13,12 +13,13 @@ import {
 import { makeTapDiscriminator, type Tap } from "./input";
 import { mountSettings } from "./settings";
 import { drawWeatherView } from "./weatherView";
-import { drawCockpitView } from "./cockpitView";
+import { drawCockpitView, setIndexData as setCockpitIndexData } from "./cockpitView";
 import { refreshIfStale, rebuildStations, invalidate as invalidateMetar } from "./weather";
 import { refreshIfStale as refreshOutdoorTemp, invalidate as invalidateOutdoorTemp } from "./outdoorTemp";
 import { fetchAircraft, clearAircraft } from "./aircraft";
 import { RANGE_PRESETS } from "./theme";
 import { ensureTiles as ensureTilesForView, currentTiles } from "./viewTiles";
+import { applyUrlParams, updateShareUrl } from "./shareUrl";
 
 const KM_PER_NM = 1.852;
 
@@ -156,7 +157,17 @@ function advanceRing(): void {
 
 function startNonRadarTicker(): void {
   if (nonRadarTicker !== null) clearInterval(nonRadarTicker);
-  nonRadarTicker = window.setInterval(() => requestFrame(), 1000);
+  // Repaint every second so the freshness label and cockpit second-sweep
+  // tick. refreshIfStale is TTL-gated (5 min) inside weather.ts, so
+  // calling it every tick is a no-op most seconds — the label ticks up
+  // in place and a fresh fetch fires automatically at the TTL boundary
+  // without needing a separate timer.
+  nonRadarTicker = window.setInterval(() => {
+    if (state.view === "weather" || state.view === "cockpit") {
+      refreshIfStale().catch(() => { /* no-op */ });
+    }
+    requestFrame();
+  }, 1000);
 }
 
 function enterWeather(): void {
@@ -172,7 +183,15 @@ function enterWeather(): void {
 
 function enterCockpit(): void {
   setView("cockpit");
+  // Cockpit needs METAR fetched too — the wind/baro reference-position
+  // line below the wind indicator comes from the nearest METAR station,
+  // and the "X min ago" label above the wind reflects that fetch.
+  if (indexData) {
+    rebuildStations(indexData.airportIndex, state.metar.centerLat,
+                    state.metar.centerLon, state.metar.radiusNm);
+  }
   refreshOutdoorTemp().then(() => requestFrame()).catch(() => { /* no-op */ });
+  refreshIfStale().then(() => requestFrame()).catch(() => { /* no-op */ });
   startNonRadarTicker();
 }
 
@@ -185,6 +204,7 @@ subscribe(() => {
   }
   void ensureTiles();
   requestFrame();
+  updateShareUrl();
 });
 
 // If the user edits the METAR center/radius in settings, rebuild the
@@ -294,16 +314,22 @@ async function init(): Promise<void> {
     if (ctx) drawLoadingState(ctx, "map load failed");
     return;
   }
+  setCockpitIndexData(indexData);
 
   mountSettings(indexData.airportIndex);
+  // Shareable-URL parse: applies any ?view/?center/?range/?home/?metar
+  // overrides before the first tile fetch so tiles load around the
+  // intended center on the first frame.
+  applyUrlParams(indexData.airportIndex);
   await ensureTiles();
   requestFrame();
 
-  // URL hooks — kept for direct-link testing / shareable views.
-  //   ?view=weather | cockpit    boot straight into that view
-  const qs = new URLSearchParams(location.search);
-  if (qs.get("view") === "weather") enterWeather();
-  else if (qs.get("view") === "cockpit") enterCockpit();
+  // Kick per-view fetches if the URL landed us in weather / cockpit —
+  // applyUrlParams() only changes state.view; it doesn't run the
+  // enter-view side effects (METAR / outdoor-temp fetch, non-radar
+  // ticker). Explicitly enter after the fact if that's where we are.
+  if (state.view === "weather") enterWeather();
+  else if (state.view === "cockpit") enterCockpit();
 }
 
 if (document.readyState === "loading") {

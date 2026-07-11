@@ -5,9 +5,15 @@
 // the web preview we use plausible SF Bay Area placeholder values until
 // a real weather fetch is wired up.
 
+import tzlookup from "tz-lookup";
 import { CENTER_X, CENTER_Y, SIZE, PHYSICAL_PANEL_RADIUS } from "./theme";
 import { state } from "./state";
 import { cachedReading, type WxReading } from "./outdoorTemp";
+import { STATIONS, distanceNm, lastUpdateMs } from "./weather";
+import { formatFreshness } from "./weatherView";
+import { bearingDeg, compass8 } from "./projection";
+import { nearestIapAirport } from "./airports";
+import type { IndexData } from "./data";
 
 const BG = "rgb(6, 12, 26)";
 const WHITE = "rgb(230, 232, 235)";
@@ -16,6 +22,15 @@ const GREEN = "rgb(80, 220, 80)";
 const FRAME = "rgb(60, 90, 60)";
 const TEMP = "rgb(180, 200, 230)";
 const AMBER = "rgb(255, 190, 40)";
+
+// The cockpit view uses the airport index (for nearest-IAP lookup) that
+// main.ts loads on boot. Injected via setIndexData(), read via the
+// module-scoped `indexData` variable so the view function stays a pure
+// (ctx) → void signature.
+let indexData: IndexData | null = null;
+export function setIndexData(d: IndexData | null): void {
+  indexData = d;
+}
 
 function drawRadialLine(
   ctx: CanvasRenderingContext2D,
@@ -53,17 +68,52 @@ function drawSecondSweep(ctx: CanvasRenderingContext2D, sec: number): void {
   }
 }
 
-function drawTime(ctx: CanvasRenderingContext2D, hour: number, min: number): void {
-  const cx = hour >= 10 && hour <= 19 ? 116 : 120;
-  const cy = CENTER_Y;
-  const text = `${hour.toString().padStart(2, "0")}:${min.toString().padStart(2, "0")}`;
+// Return the IANA time zone for the current home location, falling back
+// to the browser's default zone if lookup throws (out-of-range coords).
+function homeTimeZone(): string {
+  try {
+    return tzlookup(state.home.lat, state.home.lon);
+  } catch {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }
+}
+
+// HH:MM in the given IANA zone using 24-hour clock. Returns "--:--" on
+// any Intl failure so the display degrades gracefully.
+function formatInZone(now: Date, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(now);
+  } catch {
+    return "--:--";
+  }
+}
+
+function drawTime(ctx: CanvasRenderingContext2D, hhmm: string): void {
+  // "12:34L" — append the L in the same face at the same size so the
+  // whole string measures as one glyph run and centers naturally.
+  const text = `${hhmm}L`;
   ctx.fillStyle = WHITE;
   // Canvas doesn't have LovyanGFX's seven-segment Font7 — use a bold
   // monospace at similar size so the layout matches.
   ctx.font = "bold 40px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, cx, cy);
+  ctx.fillText(text, CENTER_X, CENTER_Y);
+}
+
+function drawZulu(ctx: CanvasRenderingContext2D, now: Date): void {
+  const hh = now.getUTCHours().toString().padStart(2, "0");
+  const mm = now.getUTCMinutes().toString().padStart(2, "0");
+  ctx.fillStyle = TEMP;
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(`${hh}:${mm} Z`, CENTER_X, 142);
 }
 
 function drawUnsyncedPlaceholder(ctx: CanvasRenderingContext2D): void {
@@ -142,6 +192,14 @@ function drawWindIndicator(ctx: CanvasRenderingContext2D, wx: WxReading): void {
                arrowCx + 14, blockCy);
 }
 
+function drawFreshness(ctx: CanvasRenderingContext2D): void {
+  ctx.fillStyle = GRAY;
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(formatFreshness(lastUpdateMs()), CENTER_X, 30);
+}
+
 function drawBaroIndicator(ctx: CanvasRenderingContext2D, wx: WxReading): void {
   const blockCy = 205;
   const halfW = 36;
@@ -159,9 +217,47 @@ function drawBaroIndicator(ctx: CanvasRenderingContext2D, wx: WxReading): void {
 
 function drawSensorBlock(ctx: CanvasRenderingContext2D, wx: WxReading): void {
   const oat = wx.valid ? `${Math.round(wx.tempF)}F` : "--F";
-  drawLabelValue(ctx, "OAT", oat, 148, TEMP);
+  drawLabelValue(ctx, "OAT", oat, 155, TEMP);
   // Web preview has no BME280 — CABIN/RH lines omitted, matching the
-  // firmware behavior when no sensor is attached.
+  // firmware behavior when no sensor is attached. Slot at y=167-179
+  // reserved for a future cabin/RH readout so the layout stays stable
+  // when it lands.
+}
+
+// "1.2 nm NE of KSFO" — distance/bearing from the nearest METAR station
+// (the source of wind/baro on this screen) to the nearest airport with
+// a published instrument approach. If within 0.1 nm, just "KSFO". No
+// text if the airport index isn't loaded or no METAR station is known.
+function referencePositionLabel(): string | null {
+  if (!indexData) return null;
+  if (STATIONS.length === 0) return null;
+  // Nearest METAR station to the METAR-map center (state.metar). This
+  // matches what the wind/baro numbers actually reflect — the weather
+  // fetch pulls the closest station's report to that center.
+  let sta = STATIONS[0];
+  let bestD = distanceNm(state.metar.centerLat, state.metar.centerLon,
+                         sta.lat, sta.lon);
+  for (let i = 1; i < STATIONS.length; i++) {
+    const s = STATIONS[i];
+    const d = distanceNm(state.metar.centerLat, state.metar.centerLon,
+                         s.lat, s.lon);
+    if (d < bestD) { bestD = d; sta = s; }
+  }
+  const nearest = nearestIapAirport(indexData.airportIndex, sta.lat, sta.lon);
+  if (!nearest) return sta.icao;
+  if (nearest.distanceNm <= 0.1) return nearest.icao;
+  const brg = bearingDeg(sta.lat, sta.lon, nearest.lat, nearest.lon);
+  return `${nearest.distanceNm.toFixed(1)} nm ${compass8(brg)} of ${nearest.icao}`;
+}
+
+function drawReferencePosition(ctx: CanvasRenderingContext2D): void {
+  const label = referencePositionLabel();
+  if (!label) return;
+  ctx.fillStyle = GRAY;
+  ctx.font = "9px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(label, CENTER_X, 182);
 }
 
 function applyBezelMask(ctx: CanvasRenderingContext2D): void {
@@ -181,25 +277,24 @@ export function drawCockpitView(ctx: CanvasRenderingContext2D): void {
   drawTicks(ctx);
 
   const wx = cachedReading();
+  drawFreshness(ctx);
   drawWindIndicator(ctx, wx);
 
-  // Local system clock — on the device SNTP populates this; in the
-  // browser we just use the user's wall clock.
+  // Local clock in the home planning-point's IANA zone. JS Date is
+  // always synced; no equivalent of the firmware's "waiting for SNTP"
+  // placeholder is needed — the function is kept for future offline
+  // preview parity.
   const now = new Date();
-  const hour = now.getHours();
-  const min = now.getMinutes();
+  const hhmm = formatInZone(now, homeTimeZone());
   const sec = now.getSeconds();
-
-  // JS Date is always synced; no equivalent of the firmware's
-  // "waiting for SNTP" placeholder is needed. Kept the function around
-  // so future feature parity (e.g. offline preview) can trigger it.
   void drawUnsyncedPlaceholder;
 
-  drawTime(ctx, hour, min);
+  drawTime(ctx, hhmm);
+  drawZulu(ctx, now);
   drawSensorBlock(ctx, wx);
+  drawReferencePosition(ctx);
   drawSecondSweep(ctx, sec);
   drawBaroIndicator(ctx, wx);
 
   applyBezelMask(ctx);
-  void state;  // reserved for future per-view state
 }

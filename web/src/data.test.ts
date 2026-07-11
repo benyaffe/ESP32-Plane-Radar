@@ -11,8 +11,8 @@ afterEach(() => {
 });
 
 const CANNED = [
-  ["KSFO", "SFO", "San Francisco", "SFO Intl", 37.6188, -122.375],
-  ["KOAK", "OAK", "Oakland", "OAK Intl", 37.7213, -122.2214],
+  ["KSFO", "SFO", "San Francisco", "SFO Intl", 37.6188, -122.375, 1],
+  ["KOAK", "OAK", "Oakland", "OAK Intl", 37.7213, -122.2214, 1],
 ];
 
 describe("loadIndexData", () => {

@@ -16,6 +16,7 @@ import {
 } from "./state";
 import { search as airportSearch } from "./airports";
 import type { AirportIndexRow } from "./data";
+import { lookup as geocodeLookup, type GeocodeHit } from "./geocode";
 
 interface LayerDef { id: LayerId; label: string; }
 const LAYERS: LayerDef[] = [
@@ -202,20 +203,35 @@ function populate(form: HTMLFormElement): void {
 // focus row's Label field. Attaches to any input, looks up matches via
 // airports.ts, and calls `onPick` with the chosen airport row.
 
+// Optional hook — when supplied, an address-typed pick writes lat/lon
+// directly (bypassing the airport `onPick` path). If omitted, address
+// suggestions are hidden for this input (e.g., focus-row Label inputs
+// that don't need address support).
 interface AirportSelectionHandler {
   input: HTMLInputElement;
   suggestList: HTMLUListElement;
   index: AirportIndexRow[];
   onPick: (row: AirportIndexRow) => void;
+  onAddressPick?: (hit: GeocodeHit) => void;
 }
 
+const GEOCODE_MIN_CHARS = 4;
+const GEOCODE_DEBOUNCE_MS = 300;
+
 function mountAirportTypeahead(opts: AirportSelectionHandler): void {
-  const { input, suggestList, index, onPick } = opts;
-  let currentRows: AirportIndexRow[] = [];
+  const { input, suggestList, index, onPick, onAddressPick } = opts;
+  let currentAirports: AirportIndexRow[] = [];
+  let currentAddresses: GeocodeHit[] = [];
+  let debounceTimer: number | null = null;
+  let inFlight: AbortController | null = null;
+  // Track the query the last geocode results correspond to so a stale
+  // response can't overwrite fresh airport-only results after the user
+  // shortened the query below GEOCODE_MIN_CHARS.
+  let geocodeQuery = "";
 
   function render() {
     suggestList.innerHTML = "";
-    for (const row of currentRows) {
+    for (const row of currentAirports) {
       const [icao, iata, city, name] = row;
       const li = document.createElement("li");
       li.setAttribute("role", "option");
@@ -224,32 +240,84 @@ function mountAirportTypeahead(opts: AirportSelectionHandler): void {
         `${city ? escape(city) + " — " : ""}${escape(name)}`;
       li.addEventListener("mousedown", (e) => {
         e.preventDefault();
-        pick(row);
+        pickAirport(row);
       });
       suggestList.appendChild(li);
     }
-    suggestList.hidden = currentRows.length === 0;
+    if (onAddressPick) {
+      for (const hit of currentAddresses) {
+        const li = document.createElement("li");
+        li.setAttribute("role", "option");
+        li.innerHTML =
+          `<span class="icao">📍</span>${escape(hit.displayName)}`;
+        li.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          pickAddress(hit);
+        });
+        suggestList.appendChild(li);
+      }
+    }
+    suggestList.hidden =
+      currentAirports.length === 0 && currentAddresses.length === 0;
   }
 
-  function pick(row: AirportIndexRow) {
+  function pickAirport(row: AirportIndexRow) {
     onPick(row);
     suggestList.hidden = true;
   }
 
+  function pickAddress(hit: GeocodeHit) {
+    if (onAddressPick) onAddressPick(hit);
+    suggestList.hidden = true;
+  }
+
   input.addEventListener("input", () => {
-    currentRows = airportSearch(index, input.value);
+    const q = input.value.trim();
+    currentAirports = airportSearch(index, q);
+    // Airport results render immediately every keystroke. Address
+    // results trail behind on debounce; blank them now so stale hits
+    // don't mix with the fresh airport pass.
+    if (q.length < GEOCODE_MIN_CHARS || q !== geocodeQuery) {
+      currentAddresses = [];
+    }
     render();
+
+    if (!onAddressPick) return;
+    if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+    if (inFlight) { inFlight.abort(); inFlight = null; }
+    if (q.length < GEOCODE_MIN_CHARS) return;
+    debounceTimer = window.setTimeout(() => {
+      const ctrl = new AbortController();
+      inFlight = ctrl;
+      const queryAtRequest = q;
+      geocodeLookup(queryAtRequest, ctrl.signal)
+        .then((hits) => {
+          // Ignore if the user has typed since the request fired.
+          if (input.value.trim() !== queryAtRequest) return;
+          geocodeQuery = queryAtRequest;
+          currentAddresses = hits;
+          render();
+        })
+        .catch(() => { /* aborted or transient — silent */ });
+    }, GEOCODE_DEBOUNCE_MS);
   });
   input.addEventListener("focus", () => {
-    if (currentRows.length > 0) suggestList.hidden = false;
+    if (currentAirports.length > 0 || currentAddresses.length > 0) {
+      suggestList.hidden = false;
+    }
   });
   input.addEventListener("blur", () => {
     setTimeout(() => (suggestList.hidden = true), 120);
   });
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && currentRows[0]) {
-      e.preventDefault();
-      pick(currentRows[0]);
+    if (e.key === "Enter") {
+      if (currentAirports[0]) {
+        e.preventDefault();
+        pickAirport(currentAirports[0]);
+      } else if (currentAddresses[0]) {
+        e.preventDefault();
+        pickAddress(currentAddresses[0]);
+      }
     } else if (e.key === "Escape") {
       suggestList.hidden = true;
       input.blur();
@@ -270,7 +338,27 @@ export function mountSettings(airportIndex: AirportIndexRow[]): void {
   const form = dialog.querySelector<HTMLFormElement>(".settings-form")!;
   const tbody = form.querySelector<HTMLTableSectionElement>(".focus-table tbody")!;
 
-  // Home + METAR "Center on airport" boxes.
+  // Mirror the current Home lat/lon inputs into the focus-ring Home row
+  // (readonly Lat/Lon cells at data-idx="0"). Called on every keystroke
+  // in the Home number inputs and on typeahead pick so the focus table
+  // reflects the draft value before Save.
+  function syncFocusHomeRow(): void {
+    const homeLat = (form.elements.namedItem("home_lat") as HTMLInputElement)?.value;
+    const homeLon = (form.elements.namedItem("home_lon") as HTMLInputElement)?.value;
+    const tr = tbody.querySelector<HTMLTableRowElement>('tr[data-idx="0"]');
+    if (!tr) return;
+    const latIn = tr.querySelector<HTMLInputElement>(".fp-lat");
+    const lonIn = tr.querySelector<HTMLInputElement>(".fp-lon");
+    if (latIn && homeLat !== undefined) latIn.value = homeLat;
+    if (lonIn && homeLon !== undefined) lonIn.value = homeLon;
+  }
+  (form.elements.namedItem("home_lat") as HTMLInputElement)
+    ?.addEventListener("input", syncFocusHomeRow);
+  (form.elements.namedItem("home_lon") as HTMLInputElement)
+    ?.addEventListener("input", syncFocusHomeRow);
+
+  // Home + METAR "Center on airport" boxes. Both accept ICAO/IATA (via
+  // airport typeahead) AND street addresses (via geocode).
   for (const input of Array.from(form.querySelectorAll<HTMLInputElement>(".airport-search"))) {
     const target = input.dataset.target;
     const suggest = input.nextElementSibling as HTMLUListElement;
@@ -283,11 +371,25 @@ export function mountSettings(airportIndex: AirportIndexRow[]): void {
         if (target === "home") {
           (form.elements.namedItem("home_lat") as HTMLInputElement).value = String(lat);
           (form.elements.namedItem("home_lon") as HTMLInputElement).value = String(lon);
+          syncFocusHomeRow();
         } else if (target === "metar") {
           (form.elements.namedItem("metar_lat") as HTMLInputElement).value = String(lat);
           (form.elements.namedItem("metar_lon") as HTMLInputElement).value = String(lon);
         }
         input.value = icao;
+      },
+      onAddressPick(hit) {
+        if (target === "home") {
+          (form.elements.namedItem("home_lat") as HTMLInputElement).value = String(hit.lat);
+          (form.elements.namedItem("home_lon") as HTMLInputElement).value = String(hit.lon);
+          syncFocusHomeRow();
+        } else if (target === "metar") {
+          (form.elements.namedItem("metar_lat") as HTMLInputElement).value = String(hit.lat);
+          (form.elements.namedItem("metar_lon") as HTMLInputElement).value = String(hit.lon);
+        }
+        // Show a shortened version in the input so it's clear an
+        // address was picked (full display_name can be very long).
+        input.value = hit.displayName.split(",")[0];
       },
     });
   }

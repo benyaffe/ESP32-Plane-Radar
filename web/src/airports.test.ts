@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { search } from "./airports";
+import { nearestIapAirport, search } from "./airports";
 import type { AirportIndexRow } from "./data";
 
 // The typeahead in Settings ("Center on airport", focus-ring Label
@@ -45,5 +45,30 @@ describe("airport_index.json global coverage", () => {
       const hit = search(index, icao)[0];
       expect(hit?.[0], `expected ${icao} in the index`).toBe(icao);
     }
+  });
+
+  it("carries an IAP flag on the 7th tuple element", () => {
+    // Major hubs virtually always have a published instrument approach.
+    // Guards the widened AirportIndexRow shape (see data.ts) — a
+    // regression here would break cockpit's nearest-IAP reference line.
+    const hit = search(index, "KSFO")[0];
+    expect(hit?.[6]).toBe(1);
+  });
+});
+
+describe("nearestIapAirport", () => {
+  it("returns KSFO for a point just north of SFO's field", () => {
+    // A point ~2 nm north of KSFO — the nearest IAP airport should be
+    // KSFO (37.6198, -122.3748), not something farther away.
+    const nearest = nearestIapAirport(index, 37.65, -122.375);
+    expect(nearest?.icao).toBe("KSFO");
+    expect(nearest?.distanceNm).toBeLessThan(3);
+  });
+
+  it("returns null when no rows have IAP", () => {
+    const empty: AirportIndexRow[] = [
+      ["ZZZ1", "", "Nowhere", "Nowhere", 0, 0, 0],
+    ];
+    expect(nearestIapAirport(empty, 37.75, -122.45)).toBeNull();
   });
 });

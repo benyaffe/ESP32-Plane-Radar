@@ -240,6 +240,32 @@ export function setCenter(lat: number, lon: number, label: string): void {
   notify();
 }
 
+// Session-only override setters — mutate state in place but do NOT
+// persist to localStorage. Used by the shareable-URL feature: someone
+// visits ?view=cockpit&home=KSFO and the app applies the override for
+// this tab session without touching the cookie. Their saved home
+// returns the next time they open the site without params. If they
+// open Settings and click Save, `saveHome`/`saveMetar` takes over and
+// the session override becomes persisted.
+export function setSessionHome(home: HomeLocation): void {
+  state.home = home;
+  const homeSlot = state.focusRing.find(fp => fp.isHome);
+  if (homeSlot) {
+    homeSlot.lat = home.lat;
+    homeSlot.lon = home.lon;
+    if (state.focusIdx >= 0 && state.focusRing[state.focusIdx]?.isHome) {
+      state.centerLat = home.lat;
+      state.centerLon = home.lon;
+    }
+  }
+  notify();
+}
+
+export function setSessionMetar(metar: MetarConfig): void {
+  state.metar = metar;
+  notify();
+}
+
 export function setView(v: ViewMode): void {
   state.view = v;
   notify();

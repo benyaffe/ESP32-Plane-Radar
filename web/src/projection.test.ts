@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  bearingDeg,
+  compass8,
   distSqFromCenter,
   makeView,
   project,
@@ -86,5 +88,53 @@ describe("segmentOnScreen", () => {
 
   it("is true for a segment that straddles the edge", () => {
     expect(segmentOnScreen(-30, 100, 100, 100)).toBe(true);
+  });
+});
+
+describe("bearingDeg", () => {
+  it("returns ~0 for a point due north", () => {
+    expect(bearingDeg(SF_LAT, SF_LON, SF_LAT + 1, SF_LON)).toBeCloseTo(0, 1);
+  });
+
+  it("returns ~90 for a point due east", () => {
+    expect(bearingDeg(SF_LAT, SF_LON, SF_LAT, SF_LON + 1)).toBeCloseTo(90, 0);
+  });
+
+  it("returns ~180 for a point due south", () => {
+    expect(bearingDeg(SF_LAT, SF_LON, SF_LAT - 1, SF_LON)).toBeCloseTo(180, 1);
+  });
+
+  it("returns ~270 for a point due west", () => {
+    expect(bearingDeg(SF_LAT, SF_LON, SF_LAT, SF_LON - 1)).toBeCloseTo(270, 0);
+  });
+
+  it("returns a value in [0, 360) for arbitrary inputs", () => {
+    const b = bearingDeg(SF_LAT, SF_LON, 40.7128, -74.006);
+    expect(b).toBeGreaterThanOrEqual(0);
+    expect(b).toBeLessThan(360);
+  });
+});
+
+describe("compass8", () => {
+  it("bins the 8 cardinal / intercardinal centers", () => {
+    expect(compass8(0)).toBe("N");
+    expect(compass8(45)).toBe("NE");
+    expect(compass8(90)).toBe("E");
+    expect(compass8(135)).toBe("SE");
+    expect(compass8(180)).toBe("S");
+    expect(compass8(225)).toBe("SW");
+    expect(compass8(270)).toBe("W");
+    expect(compass8(315)).toBe("NW");
+  });
+
+  it("rounds to the nearest bin", () => {
+    expect(compass8(22)).toBe("N");     // 22 rounds down to 0
+    expect(compass8(23)).toBe("NE");    // 23 rounds up to 45
+    expect(compass8(359)).toBe("N");
+  });
+
+  it("normalizes negative and wrap-around inputs", () => {
+    expect(compass8(-45)).toBe("NW");
+    expect(compass8(720 + 90)).toBe("E");
   });
 });

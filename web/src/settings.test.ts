@@ -14,11 +14,11 @@ import type { AirportIndexRow } from "./data";
 
 // Global-covering airport index for the tests.
 const INDEX: AirportIndexRow[] = [
-  ["KSFO", "SFO", "San Francisco", "San Francisco Intl", 37.6188, -122.3750],
-  ["KOAK", "OAK", "Oakland", "Oakland Intl", 37.7213, -122.2214],
-  ["KRNO", "RNO", "Reno", "Reno-Tahoe Intl", 39.4990, -119.7681],
-  ["VYYY", "RGN", "Yangon", "Yangon Intl", 16.9073, 96.1332],
-  ["EGLL", "LHR", "London", "London Heathrow", 51.4706, -0.4619],
+  ["KSFO", "SFO", "San Francisco", "San Francisco Intl", 37.6188, -122.3750, 1],
+  ["KOAK", "OAK", "Oakland", "Oakland Intl", 37.7213, -122.2214, 1],
+  ["KRNO", "RNO", "Reno", "Reno-Tahoe Intl", 39.4990, -119.7681, 1],
+  ["VYYY", "RGN", "Yangon", "Yangon Intl", 16.9073, 96.1332, 1],
+  ["EGLL", "LHR", "London", "London Heathrow", 51.4706, -0.4619, 1],
 ];
 
 beforeEach(() => {

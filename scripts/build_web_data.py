@@ -7,13 +7,19 @@ tile pyramid the firmware fetches (see scripts/build_tiles.py). This
 script only produces the one file that isn't naturally per-tile:
 
   web/public/data/airport_index.json  compact typeahead payload for all
-                                       recognizable US airports:
-                                       [[icao, iata, city, name, lat, lon],
-                                        ...]
+                                       recognizable airports globally:
+                                       [[icao, iata, city, name, lat, lon,
+                                         iap], ...]
+                                       iap = 0/1: has an instrument
+                                       approach (used by the cockpit
+                                       view's "nearest IAP airport"
+                                       reference line).
 
-Source is OurAirports (same CSV the tile bake uses for per-tile
-airports); this script just widens the filter to "any recognizable
-airport globally" so the Settings picker can find one anywhere.
+Source is OurAirports (same CSVs the tile bake uses); this script
+widens the filter to "any recognizable airport globally" so the
+Settings picker can find one anywhere, and combines the same runway +
+navaid signals that scripts/tile_airports.py uses to derive the IAP
+flag.
 """
 from __future__ import annotations
 
@@ -24,12 +30,23 @@ import sys
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tile_airports import iap_idents_from_openflight_data  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "web" / "public" / "data"
 
 AIRPORTS_URL = (
     "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/"
     "airports.csv"
+)
+RUNWAYS_URL = (
+    "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/"
+    "runways.csv"
+)
+NAVAIDS_URL = (
+    "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/"
+    "navaids.csv"
 )
 
 # OurAirports type → visual tier. Higher = more prominent on the map.
@@ -49,6 +66,9 @@ def fetch_csv(url: str) -> list[dict[str, str]]:
 
 def build_airport_index() -> list[list[object]]:
     airports = fetch_csv(AIRPORTS_URL)
+    runways = fetch_csv(RUNWAYS_URL)
+    navaids = fetch_csv(NAVAIDS_URL)
+    iap_set = iap_idents_from_openflight_data(runways, navaids)
     index: list[list[object]] = []
     for a in airports:
         atype = a.get("type", "")
@@ -70,6 +90,7 @@ def build_airport_index() -> list[list[object]]:
         except (KeyError, ValueError, TypeError):
             continue
         iata = (a.get("iata_code") or "").strip()
+        has_iap = 1 if ident.upper() in iap_set else 0
         index.append([
             ident,
             iata,
@@ -77,6 +98,7 @@ def build_airport_index() -> list[list[object]]:
             a.get("name", ""),
             round(lat, 5),
             round(lon, 5),
+            has_iap,
         ])
     # Sort by tier desc then ICAO so large hubs rank first in the picker.
     tier_lookup = {

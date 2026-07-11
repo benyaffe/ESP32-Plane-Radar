@@ -26,13 +26,20 @@ describe("drawCockpitView", () => {
     expect(ctx.countOf("moveTo")).toBeGreaterThanOrEqual(60);
   });
 
-  it("renders an HH:MM clock string (never '--:--' since JS Date always syncs)", () => {
+  it("renders an HH:MML local clock string (never '--:--' since JS Date always syncs)", () => {
     const ctx = makeCanvasSpy();
     drawCockpitView(ctx);
-    // Some fillText should look like a HH:MM formatted string.
+    // Big local time carries an 'L' suffix; e.g. "14:03L".
     const textCalls = ctx.callsOf("fillText").map(c => String(c.args[0]));
-    expect(textCalls.some(t => /^\d{2}:\d{2}$/.test(t))).toBe(true);
+    expect(textCalls.some(t => /^\d{2}:\d{2}L$/.test(t))).toBe(true);
     expect(textCalls.every(t => t !== "--:--")).toBe(true);
+  });
+
+  it("renders a Zulu time string in HH:MM Z format", () => {
+    const ctx = makeCanvasSpy();
+    drawCockpitView(ctx);
+    const textCalls = ctx.callsOf("fillText").map(c => String(c.args[0]));
+    expect(textCalls.some(t => /^\d{2}:\d{2} Z$/.test(t))).toBe(true);
   });
 
   it("shows the OAT label even with an invalid weather reading", () => {
