@@ -49,7 +49,6 @@ def _small_dataset():
                 [[[-122.5, 37.75], [-122.4, 37.75], [-122.4, 37.85], [-122.5, 37.85], [-122.5, 37.75]]]
             )
         ],
-        island_features=[],
         water_features=[
             _poly_feat(
                 [[[-122.45, 37.78], [-122.44, 37.78], [-122.44, 37.79], [-122.45, 37.79], [-122.45, 37.78]]]
@@ -98,7 +97,6 @@ def test_build_all_tiles_drops_empty_tiles():
     tiles = bt.build_all_tiles(
         coast_features=[_line_feat([(-122.5, 37.75), (-122.3, 37.85)])],
         land_features=[],
-        island_features=[],
         water_features=[],
         airport_rows=[],
         runway_rows=[],
@@ -113,15 +111,15 @@ def test_build_all_tiles_respects_zoom_levels_filter():
     assert {t.z for t in tiles} == {7}
 
 
-def test_build_all_tiles_islands_merge_into_land_layer():
-    """Islands live in a separate Natural Earth file but should
-    render identically to the main landmass — merged into the same
-    SECTION_LAND payload."""
+def test_build_all_tiles_land_polygons_flow_into_land_section():
+    """Land polygons produce SECTION_LAND payloads. GSHHG L1 mixes
+    continents and islands into one file (no separate 'islands' arg
+    needed) — this test locks that a lone polygon feature still lands
+    in tile.land."""
     ring = [[-100.0, 30.0], [-99.0, 30.0], [-99.0, 31.0], [-100.0, 31.0], [-100.0, 30.0]]
     tiles = bt.build_all_tiles(
         coast_features=[],
-        land_features=[],
-        island_features=[_poly_feat([ring])],
+        land_features=[_poly_feat([ring])],
         water_features=[],
         airport_rows=[],
         runway_rows=[],

@@ -24,27 +24,30 @@ import sys
 import urllib.request
 from pathlib import Path
 
+import gshhg_loader as gshhg
 import tile_airports as ta
 import tile_coastline as tc
 import tile_format as tf
 import tile_polygons as tp
 import tile_scheme as ts
+import tile_shapely as tsh  # GEOS-backed clip; the pure-Python paths choke on GSHHG-scale polygons
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE_DIR = ROOT / ".local-data"
 OUT_DIR = ROOT / "web" / "public" / "data"
 
+# Land + lake polygons come from GSHHG full-resolution shapefiles
+# (Wessel & Smith's Global Self-consistent Hierarchical High-resolution
+# Geography). Coastline polylines are derived from GSHHG land polygon
+# outer rings — GSHHG doesn't ship separate coastlines because polygon
+# boundaries ARE the coast. Full-res means Manhattan renders with
+# hundreds of vertices instead of Natural Earth 10m's ~8, and wide
+# rivers like the Hudson trace correctly as the boundary between the
+# continental land polygon and its Manhattan "island" cutout.
 NE = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson"
 SOURCES = {
-    "coastline": f"{NE}/ne_10m_coastline.geojson",
-    "land": f"{NE}/ne_10m_land.geojson",
-    "islands": f"{NE}/ne_10m_minor_islands.geojson",
-    "lakes": f"{NE}/ne_10m_lakes.geojson",
-    # Inland rivers — folded into the Coast section (both are polylines
-    # rendered with the same coastline-color pass on both firmware and
-    # web). Without this feed the tiles have no inland water at all —
-    # Willamette River through Corvallis, Sacramento River delta, etc.
-    # never render.
+    # Inland rivers stay on Natural Earth (GSHHG's WDBII river data is
+    # coarser than ne_10m for named rivers).
     "rivers": f"{NE}/ne_10m_rivers_lake_centerlines.geojson",
 }
 OA = "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main"
@@ -78,7 +81,6 @@ def fetch_csv_rows(url: str) -> list[dict]:
 def build_all_tiles(
     coast_features: list[dict],
     land_features: list[dict],
-    island_features: list[dict],
     water_features: list[dict],
     airport_rows: list[dict],
     runway_rows: list[dict],
@@ -95,20 +97,23 @@ def build_all_tiles(
     Returns a list of Tile objects in deterministic (z, x, y) order so
     the pipeline output is byte-identical for byte-identical inputs.
     """
-    coast = tc.build_coastline_tiles(coast_features, zoom_levels)
+    # Land + coastline come from GSHHG full-res; both are far too big
+    # for the naive per-vertex Sutherland-Hodgman clip. Route through
+    # the shapely (GEOS) path — orders of magnitude faster and the
+    # intersection cleanly drops the tile-boundary segments that would
+    # otherwise render as fake coastlines.
+    coast = tsh.build_coastline_tiles(coast_features, zoom_levels)
     # Rivers piggyback on the Coast section: same LineString geometry,
     # same "draw as thin coastline-color polyline" render path on both
     # firmware (coastline_overlay.cpp) and web (drawCoastline in
-    # renderer.ts). Zero new format/renderer surface — the tradeoff is
-    # rivers render in the coastline color instead of a distinct blue.
+    # renderer.ts). The pure-Python coastline builder is fine here —
+    # Natural Earth 10m rivers are far below GSHHG scale.
     if river_features:
         river_tiles = tc.build_coastline_tiles(river_features, zoom_levels)
         for key, polys in river_tiles.items():
             coast.setdefault(key, []).extend(polys)
-    land = tp.build_polygon_tiles(land_features, zoom_levels)
-    for key, polys in tp.build_polygon_tiles(island_features, zoom_levels).items():
-        land.setdefault(key, []).extend(polys)
-    water = tp.build_polygon_tiles(water_features, zoom_levels)
+    land = tsh.build_polygon_tiles(land_features, zoom_levels)
+    water = tsh.build_polygon_tiles(water_features, zoom_levels)
     airports = ta.build_airport_tiles(
         airport_rows, runway_rows, iap_icaos, zoom_levels
     )
@@ -171,11 +176,35 @@ def main() -> None:
         f"{len(iap_icaos)}",
         file=sys.stderr,
     )
+    # GSHHG full-res: land polygons at hundreds-to-thousands of vertices
+    # per island. Coastline polylines are derived from the polygon outer
+    # rings — GSHHG doesn't ship coastlines separately because the
+    # polygon boundary IS the coast. Tile-boundary artifacts don't
+    # appear because the polyline clip in tile_coastline.py splits at
+    # tile edges and only keeps the interior (non-boundary) fragments.
+    gshhg_dir = gshhg.ensure_gshhg_extracted(CACHE_DIR)
+    # Filter GSHHG polygons < 0.5 km² — 88% of L1 records are
+    # sub-1 km² rocks/sandbars that render as sub-pixel dots at radar
+    # zoom (240 px covers ~46 km at 25 nm). Filtering keeps most z=7
+    # tiles under the 128 KB firmware cap without changing the pipeline.
+    print("loading GSHHG L1 (continental + island coastlines, area>=0.5 km²)…",
+          file=sys.stderr)
+    land_features = gshhg.load_polygon_features(
+        gshhg_dir / "GSHHS_shp" / "f" / "GSHHS_f_L1.shp",
+        min_area_km2=0.5,
+    )
+    print(f"  L1: {len(land_features)} land features (post-filter)", file=sys.stderr)
+    print("loading GSHHG L2 (lakes, area>=0.5 km²)…", file=sys.stderr)
+    water_features = gshhg.load_polygon_features(
+        gshhg_dir / "GSHHS_shp" / "f" / "GSHHS_f_L2.shp",
+        min_area_km2=0.5,
+    )
+    print(f"  L2: {len(water_features)} lake features (post-filter)", file=sys.stderr)
+    coast_features = gshhg.polygon_features_to_coastline_features(land_features)
     tiles = build_all_tiles(
-        coast_features=load_geojson_features(SOURCES["coastline"]),
-        land_features=load_geojson_features(SOURCES["land"]),
-        island_features=load_geojson_features(SOURCES["islands"]),
-        water_features=load_geojson_features(SOURCES["lakes"]),
+        coast_features=coast_features,
+        land_features=land_features,
+        water_features=water_features,
         river_features=load_geojson_features(SOURCES["rivers"]),
         airport_rows=fetch_csv_rows(AIRPORTS_URL),
         runway_rows=runway_rows,

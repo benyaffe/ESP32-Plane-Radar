@@ -19,3 +19,7 @@ coverage.xml
 
 # Local Netlify folder
 .netlify
+
+# SDL emulator runtime state (config server persists the user's edits
+# per repo checkout; not intended to travel with the code).
+emulator_config.json
