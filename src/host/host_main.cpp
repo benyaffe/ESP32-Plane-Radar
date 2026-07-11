@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "hardware/display.h"
+#include "host/config_server.h"
 #include "services/adsb_client.h"
 #include "services/focus_points.h"
 #include "services/metar_config.h"
@@ -208,6 +209,12 @@ void setup() {
   services::metar_config::init();
   ui::radar::rangeInit();
   services::focus::init();
+  // Load persisted config from emulator_config.json (if present) so
+  // restarts remember what you set via the config web UI. Runs after
+  // the service init()s so it overrides their defaults. Then start
+  // the mirror-of-WiFiManager HTTP server on 127.0.0.1:8080.
+  host::config_server::loadPersistedConfig();
+  host::config_server::start();
   g_ring_index = services::focus::currentIndex();
   ui::layers::init();
   ui::cockpit::init();
@@ -231,6 +238,15 @@ void loop() {
   static unsigned long last_shot_ms = 0;
   static unsigned long last_adsb_ms = 0;
   bootButtonPollLongPress();
+  // Drain any config-server POST /save changes onto this thread before
+  // we render, so a mid-frame HTTP write can't race the render code.
+  // Redraws the current view to pick up new home/METAR values right
+  // away.
+  if (host::config_server::applyPending()) {
+    if (onRadar()) ui::radarDisplayDraw();
+    else if (onWeather()) { ui::weather::refresh(); ui::weather::draw(); }
+    else if (onCockpit()) { ui::cockpit::refresh(); ui::cockpit::draw(); }
+  }
   const BootTap ev = bootButtonConsumeEvent();
   if (ev == BootTap::Single)      adjustCurrent();
   else if (ev == BootTap::Double) advanceRing();

@@ -236,7 +236,26 @@ static double s_override_lon = 0.0;
 void init() {}
 double lat() { return s_override_active ? s_override_lat : s_lat; }
 double lon() { return s_override_active ? s_override_lon : s_lon; }
-bool saveFromStrings(const char*, const char*) { return false; }
+
+// Native saveFromStrings — the ESP32 build persists to NVS; the SDL
+// emulator persists to the in-memory `s_lat/s_lon` slot and (via
+// host::config_server::applyPending) mirrors the whole config to
+// emulator_config.json. Silently keeps the prior value on any parse
+// failure so a bad HTTP POST can never zero the location.
+bool saveFromStrings(const char* lat_str, const char* lon_str) {
+  if (lat_str == nullptr || lon_str == nullptr) return false;
+  char* end = nullptr;
+  const double lat = std::strtod(lat_str, &end);
+  if (end == lat_str) return false;
+  end = nullptr;
+  const double lon = std::strtod(lon_str, &end);
+  if (end == lon_str) return false;
+  if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) return false;
+  s_lat = lat;
+  s_lon = lon;
+  return true;
+}
+
 void clear() { s_lat = kNativeCenterLat; s_lon = kNativeCenterLon; }
 void setOverride(double lat, double lon) {
   s_override_lat = lat;
