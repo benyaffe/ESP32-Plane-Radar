@@ -63,6 +63,9 @@ jobs:
           Sources fetched at commit time:
             - Natural Earth 1:10m coastline / land / minor_islands / lakes
             - OurAirports airports.csv + runways.csv
-            - data/instrument_approach_airports.txt (in-repo FAA seed list)
+              (any airport with a lighted, non-closed runway is
+               force-included as IFR-capable — proxy for having a
+               published instrument approach, since OurAirports
+               doesn't publish ILS data directly)
           "
           git push

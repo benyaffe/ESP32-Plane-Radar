@@ -35,45 +35,6 @@ def _apt_row(ident="KSFO", atype="large_airport", lat="37.6188", lon="-122.375",
 
 
 # ---------------------------------------------------------------------------
-# load_iap_set — the FAA input parser
-# ---------------------------------------------------------------------------
-
-
-def test_load_iap_set_strips_comments_and_blank_lines(tmp_path):
-    p = tmp_path / "iap.txt"
-    p.write_text(
-        "# comment\n"
-        "\n"
-        "KSFO\n"
-        "  KOAK  \n"
-        "# another comment\n"
-        "khaf\n"
-    )
-    got = bt.load_iap_set(p)
-    assert got == {"KSFO", "KOAK", "KHAF"}
-
-
-def test_load_iap_set_missing_file_is_empty_set(tmp_path):
-    assert bt.load_iap_set(tmp_path / "does-not-exist.txt") == set()
-
-
-def test_load_iap_set_uppercases_everything(tmp_path):
-    p = tmp_path / "iap.txt"
-    p.write_text("kJfK\n")
-    assert bt.load_iap_set(p) == {"KJFK"}
-
-
-def test_shipped_iap_list_is_non_empty():
-    """The bootstrapped file must at least contain the Bay Area focus
-    airports referenced by the user's memory — otherwise a fresh pipeline
-    run would silently drop the small-airport IAP force-includes."""
-    got = bt.load_iap_set()
-    assert "KHAF" in got
-    assert "KSQL" in got
-    assert "KSFO" in got
-
-
-# ---------------------------------------------------------------------------
 # build_all_tiles — merge behavior
 # ---------------------------------------------------------------------------
 

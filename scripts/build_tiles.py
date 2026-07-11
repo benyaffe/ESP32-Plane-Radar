@@ -33,7 +33,6 @@ import tile_scheme as ts
 ROOT = Path(__file__).resolve().parents[1]
 CACHE_DIR = ROOT / ".local-data"
 OUT_DIR = ROOT / "web" / "public" / "data"
-IAP_LIST_PATH = ROOT / "data" / "instrument_approach_airports.txt"
 
 NE = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson"
 SOURCES = {
@@ -67,19 +66,6 @@ def fetch_csv_rows(url: str) -> list[dict]:
     download(url, dest)
     with dest.open(newline="") as f:
         return list(csv.DictReader(f))
-
-
-def load_iap_set(path: Path = IAP_LIST_PATH) -> set[str]:
-    """Read one-ICAO-per-line file, skipping blanks and #-comments."""
-    if not path.exists():
-        return set()
-    out: set[str] = set()
-    for raw in path.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        out.add(line.upper())
-    return out
 
 
 def build_all_tiles(
@@ -160,14 +146,20 @@ def main() -> None:
     zoom_levels = tuple(sorted(set(args.zoom))) if args.zoom else ts.ZOOM_LEVELS
     print(f"building tile pyramid at zoom levels: {zoom_levels}", file=sys.stderr)
 
+    runway_rows = fetch_csv_rows(RUNWAYS_URL)
+    iap_icaos = ta.iap_idents_from_runways(runway_rows)
+    print(
+        f"IAP-capable airports (lighted runway proxy): {len(iap_icaos)}",
+        file=sys.stderr,
+    )
     tiles = build_all_tiles(
         coast_features=load_geojson_features(SOURCES["coastline"]),
         land_features=load_geojson_features(SOURCES["land"]),
         island_features=load_geojson_features(SOURCES["islands"]),
         water_features=load_geojson_features(SOURCES["lakes"]),
         airport_rows=fetch_csv_rows(AIRPORTS_URL),
-        runway_rows=fetch_csv_rows(RUNWAYS_URL),
-        iap_icaos=load_iap_set(),
+        runway_rows=runway_rows,
+        iap_icaos=iap_icaos,
         zoom_levels=zoom_levels,
     )
     count, total_bytes = write_tiles(tiles, args.out_dir)

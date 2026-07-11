@@ -37,6 +37,63 @@ def _rwy(airport="KSFO", le_lat="37.61", le_lon="-122.38",
 
 
 # ---------------------------------------------------------------------------
+# iap_idents_from_runways — instrument-approach proxy
+# ---------------------------------------------------------------------------
+
+
+def _rwrow(airport="KSFO", lighted="1", closed="0"):
+    return {
+        "airport_ident": airport,
+        "lighted": lighted,
+        "closed": closed,
+    }
+
+
+def test_lighted_runway_makes_airport_iap():
+    """Runway with lights on = airport supports night/IFR ops = force-
+    include on the map even if it's tier 1."""
+    assert ta.iap_idents_from_runways([_rwrow("KJFK", lighted="1")]) == {"KJFK"}
+
+
+def test_unlighted_runway_does_not_qualify():
+    """Grass strips and daylight-only fields don't count — the whole
+    point of the proxy is to weed them out."""
+    assert ta.iap_idents_from_runways([_rwrow("KAAA", lighted="0")]) == set()
+
+
+def test_closed_runway_does_not_qualify():
+    """A lighted runway on a closed airport shouldn't force-include
+    the airport — the field isn't operational."""
+    assert ta.iap_idents_from_runways([_rwrow("KAAA", lighted="1", closed="1")]) == set()
+
+
+def test_ident_uppercased_to_match_airport_idents():
+    """airport_ident values on the runways.csv side may be lowercase;
+    normalize so the set matches what build_airports() compares against."""
+    assert ta.iap_idents_from_runways([_rwrow("ksfo", lighted="1")]) == {"KSFO"}
+
+
+def test_missing_airport_ident_dropped():
+    """Runway rows with no associated airport are noise; don't create
+    a phantom empty-string ident in the IAP set."""
+    got = ta.iap_idents_from_runways([
+        {"airport_ident": "", "lighted": "1", "closed": "0"},
+        {"lighted": "1", "closed": "0"},  # no key at all
+    ])
+    assert got == set()
+
+
+def test_airport_with_mixed_runways_counted_once():
+    """One airport, two runways (one lighted, one not) — only need one
+    lighted runway to qualify. Set semantics dedupe naturally."""
+    got = ta.iap_idents_from_runways([
+        _rwrow("KSFO", lighted="1"),
+        _rwrow("KSFO", lighted="0"),
+    ])
+    assert got == {"KSFO"}
+
+
+# ---------------------------------------------------------------------------
 # build_airports filter matrix
 # ---------------------------------------------------------------------------
 

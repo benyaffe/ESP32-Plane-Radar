@@ -1,20 +1,21 @@
 """Per-tile airport pipeline.
 
-Inputs: OurAirports CSVs (airports + runways) plus a set of ICAO codes
-flagged in FAA NASR as having published instrument approach procedures.
-Emits {(z, x, y): [Airport, ...]} for the tile pyramid.
+Inputs: OurAirports CSVs (airports, runways). Emits
+{(z, x, y): [Airport, ...]} for the tile pyramid.
 
 Filtering:
   * Keep every airport worldwide with a 4-letter ICAO code that is
     either a large airport, a medium airport, or a small airport with
     scheduled service.
-  * Force-include any airport in the IAP set — instrument-approach
-    airports matter to IFR pilots even when small.
+  * Force-include any airport with a lighted runway (proxy for
+    "capable of IFR / night operations" — the closest thing to
+    "has an instrument approach" that OurAirports actually exposes;
+    the navaids.csv table only contains VOR/NDB/DME, not ILS).
   * Drop obvious heliports.
 
-The IAP source is passed in as a parameter rather than fetched inline
-so the pipeline module stays pure and testable; the actual FAA fetch
-lives in the build_tiles.py entry point.
+The IAP source is passed in as a pre-computed set of idents rather
+than derived inline, so the pipeline module stays pure and testable;
+the actual runways.csv fetch lives in the build_tiles.py entry point.
 """
 from __future__ import annotations
 
@@ -28,6 +29,31 @@ AIRPORT_TIER = {
     "medium_airport": 2,
     "small_airport": 1,
 }
+
+
+def iap_idents_from_runways(runways: Iterable[dict]) -> set[str]:
+    """From OurAirports' runways.csv rows, return the set of airport
+    idents with at least one lighted, non-closed runway. Uppercase
+    normalized to match airport idents.
+
+    "Lighted runway" is a proxy for "field supports IFR / night ops."
+    OurAirports doesn't publish ILS/LOC data (only VOR/NDB/DME in
+    navaids.csv), and every meaningful ILS-approach airport lights
+    the approach runway — so a lighted-runway signal catches every
+    airport we'd have hand-listed as IAP-capable, plus many more,
+    without depending on FAA-specific US-only feeds. False positives
+    are limited to a few lighted rural strips with no published
+    approach; those just get drawn on the map at high zoom, no harm."""
+    out: set[str] = set()
+    for r in runways:
+        if (r.get("closed") or "").strip() == "1":
+            continue
+        if (r.get("lighted") or "").strip() != "1":
+            continue
+        ident = (r.get("airport_ident") or "").strip().upper()
+        if ident:
+            out.add(ident)
+    return out
 
 
 def _is_h_designator(s: str) -> bool:
