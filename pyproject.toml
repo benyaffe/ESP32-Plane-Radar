@@ -3,3 +3,21 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-ra --strict-markers"
+
+# `pytest --cov=scripts --cov-report=term` uses this. Not enabled by
+# default (would slow the fast local test loop); the CI job opts in.
+[tool.coverage.run]
+source = ["scripts"]
+branch = true
+omit = [
+    "scripts/dev/*",
+    "scripts/__pycache__/*",
+]
+
+[tool.coverage.report]
+skip_empty = true
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
