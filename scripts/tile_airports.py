@@ -1,21 +1,21 @@
 """Per-tile airport pipeline.
 
-Inputs: OurAirports CSVs (airports, runways). Emits
+Inputs: OurAirports CSVs (airports, runways, navaids). Emits
 {(z, x, y): [Airport, ...]} for the tile pyramid.
 
 Filtering:
   * Keep every airport worldwide with a 4-letter ICAO code that is
     either a large airport, a medium airport, or a small airport with
     scheduled service.
-  * Force-include any airport with a lighted runway (proxy for
-    "capable of IFR / night operations" — the closest thing to
-    "has an instrument approach" that OurAirports actually exposes;
-    the navaids.csv table only contains VOR/NDB/DME, not ILS).
+  * Force-include any airport that looks IFR-capable — see
+    `iap_idents_from_openflight_data()` below for the two signals we
+    combine (lighted runway = RNAV/GPS-approach-capable; on-field
+    navaid = VOR/NDB/DME-approach-capable).
   * Drop obvious heliports.
 
 The IAP source is passed in as a pre-computed set of idents rather
 than derived inline, so the pipeline module stays pure and testable;
-the actual runways.csv fetch lives in the build_tiles.py entry point.
+the actual CSV fetches live in the build_tiles.py entry point.
 """
 from __future__ import annotations
 
@@ -31,26 +31,45 @@ AIRPORT_TIER = {
 }
 
 
-def iap_idents_from_runways(runways: Iterable[dict]) -> set[str]:
-    """From OurAirports' runways.csv rows, return the set of airport
-    idents with at least one lighted, non-closed runway. Uppercase
-    normalized to match airport idents.
+def iap_idents_from_openflight_data(
+    runways: Iterable[dict],
+    navaids: Iterable[dict],
+) -> set[str]:
+    """Best-effort "has a published instrument approach" set, derived
+    from the two OurAirports CSVs that carry that signal today.
 
-    "Lighted runway" is a proxy for "field supports IFR / night ops."
-    OurAirports doesn't publish ILS/LOC data (only VOR/NDB/DME in
-    navaids.csv), and every meaningful ILS-approach airport lights
-    the approach runway — so a lighted-runway signal catches every
-    airport we'd have hand-listed as IAP-capable, plus many more,
-    without depending on FAA-specific US-only feeds. False positives
-    are limited to a few lighted rural strips with no published
-    approach; those just get drawn on the map at high zoom, no harm."""
+    Combines two proxies because no single field says "has an IAP":
+
+    * **Lighted, non-closed runway** (from runways.csv). Every airport
+      that supports night or IFR operations lights its primary runway,
+      and virtually every modern lighted runway has at least an RNAV
+      (GPS) approach published to it — RNAV is a satellite-only
+      approach that needs no ground equipment, so it exists at almost
+      every real airport with an IFR-approved runway.
+
+    * **On-field navaid** (from navaids.csv). Any VOR, NDB, DME,
+      TACAN, or VOR-DME whose `associated_airport` is this airport
+      almost always supports a VOR / NDB / DME approach at the field.
+      OurAirports' navaids.csv doesn't include ILS/LOC records, but
+      those airports are covered by the lighting signal above.
+
+    Together the two signals catch the union of RNAV, VOR, NDB, and
+    ILS approach airports globally. False positives (lighted field
+    with no published approach) are rare and harmless — the map just
+    draws one extra dot at high zoom."""
     out: set[str] = set()
+    # Signal 1 — lighted runways.
     for r in runways:
         if (r.get("closed") or "").strip() == "1":
             continue
         if (r.get("lighted") or "").strip() != "1":
             continue
         ident = (r.get("airport_ident") or "").strip().upper()
+        if ident:
+            out.add(ident)
+    # Signal 2 — on-field navaids.
+    for n in navaids:
+        ident = (n.get("associated_airport") or "").strip().upper()
         if ident:
             out.add(ident)
     return out

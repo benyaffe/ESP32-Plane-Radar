@@ -94,10 +94,11 @@ jobs:
           Automated refresh triggered by the build-tiles workflow.
           Sources fetched at commit time:
             - Natural Earth 1:10m coastline / land / minor_islands / lakes
-            - OurAirports airports.csv + runways.csv
-              (any airport with a lighted, non-closed runway is
-               force-included as IFR-capable — proxy for having a
-               published instrument approach, since OurAirports
-               doesn't publish ILS data directly)
+            - OurAirports airports.csv + runways.csv + navaids.csv
+              (an airport is force-included as IFR-capable if EITHER
+               it has a lighted non-closed runway (RNAV/GPS approach
+               proxy) OR any VOR/NDB/DME/TACAN navaid on the field
+               (VOR/NDB/DME approach proxy). Union catches every
+               airport with any published instrument approach.)
           "
           git push

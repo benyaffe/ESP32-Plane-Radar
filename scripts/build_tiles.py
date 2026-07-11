@@ -44,6 +44,7 @@ SOURCES = {
 OA = "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main"
 AIRPORTS_URL = f"{OA}/airports.csv"
 RUNWAYS_URL = f"{OA}/runways.csv"
+NAVAIDS_URL = f"{OA}/navaids.csv"
 
 
 def download(url: str, dest: Path) -> Path:
@@ -147,9 +148,11 @@ def main() -> None:
     print(f"building tile pyramid at zoom levels: {zoom_levels}", file=sys.stderr)
 
     runway_rows = fetch_csv_rows(RUNWAYS_URL)
-    iap_icaos = ta.iap_idents_from_runways(runway_rows)
+    navaid_rows = fetch_csv_rows(NAVAIDS_URL)
+    iap_icaos = ta.iap_idents_from_openflight_data(runway_rows, navaid_rows)
     print(
-        f"IAP-capable airports (lighted runway proxy): {len(iap_icaos)}",
+        f"IAP-capable airports (lighted runway + on-field navaid): "
+        f"{len(iap_icaos)}",
         file=sys.stderr,
     )
     tiles = build_all_tiles(

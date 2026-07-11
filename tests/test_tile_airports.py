@@ -37,7 +37,7 @@ def _rwy(airport="KSFO", le_lat="37.61", le_lon="-122.38",
 
 
 # ---------------------------------------------------------------------------
-# iap_idents_from_runways — instrument-approach proxy
+# iap_idents_from_openflight_data — instrument-approach superset
 # ---------------------------------------------------------------------------
 
 
@@ -49,48 +49,114 @@ def _rwrow(airport="KSFO", lighted="1", closed="0"):
     }
 
 
+def _nvrow(associated="KSFO", ntype="VOR"):
+    return {
+        "associated_airport": associated,
+        "type": ntype,
+    }
+
+
+# --- Signal 1: lighted runway (RNAV-approach proxy) -------------------
+
+
 def test_lighted_runway_makes_airport_iap():
     """Runway with lights on = airport supports night/IFR ops = force-
-    include on the map even if it's tier 1."""
-    assert ta.iap_idents_from_runways([_rwrow("KJFK", lighted="1")]) == {"KJFK"}
+    include on the map. Every modern lighted runway has at least an
+    RNAV (GPS) approach published to it."""
+    got = ta.iap_idents_from_openflight_data([_rwrow("KJFK", lighted="1")], [])
+    assert got == {"KJFK"}
 
 
-def test_unlighted_runway_does_not_qualify():
-    """Grass strips and daylight-only fields don't count — the whole
-    point of the proxy is to weed them out."""
-    assert ta.iap_idents_from_runways([_rwrow("KAAA", lighted="0")]) == set()
+def test_unlighted_runway_alone_does_not_qualify():
+    """Grass strips and daylight-only fields without any navaid on
+    the field don't count."""
+    got = ta.iap_idents_from_openflight_data([_rwrow("KAAA", lighted="0")], [])
+    assert got == set()
 
 
 def test_closed_runway_does_not_qualify():
     """A lighted runway on a closed airport shouldn't force-include
     the airport — the field isn't operational."""
-    assert ta.iap_idents_from_runways([_rwrow("KAAA", lighted="1", closed="1")]) == set()
-
-
-def test_ident_uppercased_to_match_airport_idents():
-    """airport_ident values on the runways.csv side may be lowercase;
-    normalize so the set matches what build_airports() compares against."""
-    assert ta.iap_idents_from_runways([_rwrow("ksfo", lighted="1")]) == {"KSFO"}
-
-
-def test_missing_airport_ident_dropped():
-    """Runway rows with no associated airport are noise; don't create
-    a phantom empty-string ident in the IAP set."""
-    got = ta.iap_idents_from_runways([
-        {"airport_ident": "", "lighted": "1", "closed": "0"},
-        {"lighted": "1", "closed": "0"},  # no key at all
-    ])
+    got = ta.iap_idents_from_openflight_data(
+        [_rwrow("KAAA", lighted="1", closed="1")], []
+    )
     assert got == set()
 
 
-def test_airport_with_mixed_runways_counted_once():
-    """One airport, two runways (one lighted, one not) — only need one
-    lighted runway to qualify. Set semantics dedupe naturally."""
-    got = ta.iap_idents_from_runways([
-        _rwrow("KSFO", lighted="1"),
-        _rwrow("KSFO", lighted="0"),
-    ])
+# --- Signal 2: on-field navaid (VOR/NDB/DME-approach proxy) ------------
+
+
+def test_on_field_vor_makes_airport_iap():
+    """A VOR whose associated_airport is set almost always means that
+    airport has a VOR approach — the whole point of colocating the
+    VOR with the airport."""
+    got = ta.iap_idents_from_openflight_data(
+        [], [_nvrow("KCCR", "VOR")]
+    )
+    assert got == {"KCCR"}
+
+
+def test_on_field_ndb_makes_airport_iap():
+    """NDB approaches are old but still published at hundreds of
+    smaller fields worldwide."""
+    got = ta.iap_idents_from_openflight_data(
+        [], [_nvrow("KHAF", "NDB")]
+    )
+    assert got == {"KHAF"}
+
+
+def test_on_field_dme_or_tacan_qualifies():
+    """DME and TACAN colocated with an airport indicate an approach
+    that uses distance info — force-include."""
+    got = ta.iap_idents_from_openflight_data(
+        [],
+        [_nvrow("KAAA", "DME"), _nvrow("KBBB", "TACAN"),
+         _nvrow("KCCC", "VOR-DME")],
+    )
+    assert got == {"KAAA", "KBBB", "KCCC"}
+
+
+def test_enroute_navaid_with_no_associated_airport_dropped():
+    """Enroute VORs (out in the middle of nowhere) have no
+    associated_airport — they must not create phantom empty-string
+    idents in the IAP set."""
+    got = ta.iap_idents_from_openflight_data(
+        [], [_nvrow("", "VOR"), {"type": "NDB"}]
+    )
+    assert got == set()
+
+
+# --- Combined behavior -------------------------------------------------
+
+
+def test_signals_union_when_both_present():
+    """Two airports: one caught by the lighting signal, one caught by
+    the navaid signal. Result includes both."""
+    got = ta.iap_idents_from_openflight_data(
+        [_rwrow("KJFK", lighted="1")],
+        [_nvrow("KCCR", "VOR")],
+    )
+    assert got == {"KJFK", "KCCR"}
+
+
+def test_airport_caught_by_both_signals_appears_once():
+    """Lighted runway AND on-field VOR at the same airport → still one
+    entry in the set."""
+    got = ta.iap_idents_from_openflight_data(
+        [_rwrow("KSFO", lighted="1")],
+        [_nvrow("KSFO", "VOR")],
+    )
     assert got == {"KSFO"}
+
+
+def test_ident_uppercased_from_both_sources():
+    """Both signals normalize to uppercase so the set matches what
+    build_airports() compares airport idents against."""
+    got = ta.iap_idents_from_openflight_data(
+        [_rwrow("ksfo", lighted="1")],
+        [_nvrow("koak", "VOR")],
+    )
+    assert got == {"KSFO", "KOAK"}
 
 
 # ---------------------------------------------------------------------------
