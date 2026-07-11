@@ -1,12 +1,33 @@
 #include "services/tap_sensor.h"
 
+// Pure classifier — compiled in every build so the native unit test
+// can exercise it without any Wire / ADXL345 mock. Lives outside the
+// USE_NATIVE / !USE_NATIVE split for that reason.
+namespace services::tap_sensor {
+
+TapEvents classifyIntSource(uint8_t src) {
+  TapEvents out{false, false};
+  // The ADXL345 sets SINGLE_TAP on the first tap of a pair AND on the
+  // confirmed second tap. When DOUBLE_TAP is asserted the SINGLE_TAP
+  // bit becomes redundant — drop it so one physical pair of knocks
+  // doesn't produce two gestures.
+  if (src & kIntDoubleTap) {
+    out.double_tap = true;
+  } else if (src & kIntSingleTap) {
+    out.single = true;
+  }
+  return out;
+}
+
+}  // namespace services::tap_sensor
+
 #ifdef USE_NATIVE
 
 namespace services::tap_sensor {
 
 // Native/SDL build: no I²C, no accelerometer. The SDL emulator drives
 // gestures from the SPACE key through the BOOT-button discriminator, so
-// this module is a no-op there.
+// the hardware-facing side of this module is a no-op there.
 void init() {}
 void poll() {}
 bool consumeSingleTap() { return false; }
@@ -39,9 +60,9 @@ constexpr uint8_t kRegPowerCtl    = 0x2D;
 
 constexpr uint8_t kExpectedDeviceId = 0xE5;
 
-// INT_SOURCE / INT_ENABLE bit masks.
-constexpr uint8_t kIntSingleTap = 0x40;
-constexpr uint8_t kIntDoubleTap = 0x20;
+// INT_SOURCE / INT_ENABLE bit masks — kIntSingleTap / kIntDoubleTap
+// are declared in the header alongside the pure classifier, so tests
+// and firmware share the same constants.
 
 // Tap-detection tuning. Chosen for a small knock on a rigid 3D-printed
 // enclosure — sensitive enough to fire on a fingertip tap without
@@ -114,14 +135,9 @@ void init() {
 void poll() {
   if (!s_present) return;
   const uint8_t src = readReg(kRegIntSource);   // Reading clears the flags.
-  // ADXL345 fires SINGLE_TAP on the first tap AND on the confirmed second
-  // tap of a double-tap sequence. To avoid double-counting, prefer
-  // DOUBLE_TAP when both bits are set in the same poll.
-  if (src & kIntDoubleTap) {
-    s_double_pending = true;
-  } else if (src & kIntSingleTap) {
-    s_single_pending = true;
-  }
+  const TapEvents ev = classifyIntSource(src);
+  if (ev.double_tap) s_double_pending = true;
+  if (ev.single)     s_single_pending = true;
 }
 
 bool consumeSingleTap() {

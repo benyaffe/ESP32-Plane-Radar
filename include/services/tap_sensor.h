@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // Optional accelerometer-based knock-the-case input.
 //
 // When present, an ADXL345 (I²C, address 0x53) sits inside the
@@ -29,5 +31,21 @@ bool consumeSingleTap();
 /** True if the chip latched a double-tap event since the last call.
  *  Consumes the flag. Always false when no chip is present. */
 bool consumeDoubleTap();
+
+// --- Pure logic, exposed for off-device unit testing ------------------
+// ADXL345 INT_SOURCE bit positions per the datasheet.
+constexpr uint8_t kIntSingleTap = 0x40;
+constexpr uint8_t kIntDoubleTap = 0x20;
+
+struct TapEvents {
+  bool single;
+  bool double_tap;
+};
+
+/** Interpret one INT_SOURCE byte. When both bits are set the ADXL345
+ *  is signaling "this second tap completed a double-tap sequence" —
+ *  we prefer Double and drop the redundant Single to avoid firing two
+ *  gestures for one pair of knocks. */
+TapEvents classifyIntSource(uint8_t src);
 
 }  // namespace services::tap_sensor
