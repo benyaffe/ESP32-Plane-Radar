@@ -46,6 +46,38 @@ jobs:
           find web/public/data/tiles -name '*.bin' | wc -l
           du -sh web/public/data/tiles
 
+      - name: Smoke check pyramid shape
+        # A silent bake would ship broken tiles for a whole month before
+        # anyone notices. Explicit assertions on the shape of the output
+        # make failures loud. Numbers tuned to the current 3/5/7 pyramid
+        # (~8k tiles globally); a broken run typically produces <100.
+        run: |
+          set -e
+          TILE_COUNT=$(find web/public/data/tiles -name '*.bin' | wc -l)
+          echo "Tile count: $TILE_COUNT"
+          if [ "$TILE_COUNT" -lt 3000 ]; then
+            echo "::error::Bake produced only $TILE_COUNT tiles — expected ≥ 3000. Sources likely broken."
+            exit 1
+          fi
+          for Z in 3 5 7; do
+            if [ ! -d "web/public/data/tiles/$Z" ]; then
+              echo "::error::Missing zoom directory: web/public/data/tiles/$Z"
+              exit 1
+            fi
+          done
+          # SF-area canary. If this specific tile is missing the whole
+          # SF bootstrap is broken and the emulator's built-in tile
+          # (data/emulator_bootstrap_tile_7_20_37.bin) can't be
+          # regenerated from the pipeline output.
+          if [ ! -f "web/public/data/tiles/7/20/37.bin" ]; then
+            echo "::error::SF canary tile (7/20/37) missing — SF bootstrap broken."
+            exit 1
+          fi
+          # Freshness sentinel: machine-readable UTC datetime a future
+          # monitor can compare against `now - 45 days` to decide
+          # whether the monthly cron has actually been firing.
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > web/public/data/tiles/BAKE_TIMESTAMP.txt
+
       - name: Commit refreshed tiles
         run: |
           git config user.name  "github-actions[bot]"
