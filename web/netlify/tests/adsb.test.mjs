@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handler } from "./adsb.mjs";
+import { handler } from "../functions/adsb.mjs";
 
 // The proxy has two-tier retry: airplanes.live first, opendata.adsb.fi
 // fallback. These tests lock the primary/fallback behavior so a silent

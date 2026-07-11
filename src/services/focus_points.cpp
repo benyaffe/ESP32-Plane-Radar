@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 
+#include <cmath>
 #include <cstring>
 
 #include "services/radar_location.h"

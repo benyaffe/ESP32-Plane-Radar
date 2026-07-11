@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handler } from "./metar.mjs";
+import { handler } from "../functions/metar.mjs";
 
 function ev(qs = {}) {
   return { queryStringParameters: qs };

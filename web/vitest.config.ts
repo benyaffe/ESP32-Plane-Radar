@@ -37,6 +37,9 @@ export default defineConfig({
       // yet, so the number doesn't lie about untested modules.
       all: true,
       include: ["src/**/*.ts", "netlify/functions/*.mjs"],
+      // Note: test files live in netlify/tests/ (Netlify's bundler
+      // rejects periods in function filenames, so they can't sit
+      // alongside the handlers).
     },
   },
 });

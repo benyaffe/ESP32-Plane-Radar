@@ -98,23 +98,11 @@ jobs:
       - name: Run native Unity tests
         run: pio test -e native_test
 
-  native-build-smoke:
-    # Smoke check that the SDL emulator binary still compiles + links.
-    # Catches regressions in main.cpp / host_main.cpp / host_stubs that
-    # the unit-test env misses (native_test deliberately excludes SDL,
-    # ArduinoJson, and HTTP so tests stay fast). Not a runtime test —
-    # no SDL init happens on the CI runner.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install SDL2
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
-      - name: Install PlatformIO
-        run: pip install platformio
-      - name: Build native (SDL emulator) binary
-        run: pio run -e native
-        env:
-          HOMEBREW_PREFIX: /usr
+  # Historical note: a native-build-smoke job used to live here to
+  # cross-check `pio run -e native` on Ubuntu. It doesn't currently
+  # compile there — host_stubs.cpp uses Mach-O inline asm
+  # (`.section __DATA,__const`, leading-underscore symbols) to embed
+  # data/ui_font.vlw, which the GNU assembler on Linux rejects. Fixing
+  # requires `#ifdef __APPLE__` split for the .incbin block plus a
+  # Linux SDL detection path. Deferred until someone wants to run the
+  # emulator on Linux; the Mac dev loop is unaffected.
