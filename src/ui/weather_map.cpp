@@ -52,6 +52,9 @@ constexpr int kLabelHeightPx = 14;
 constexpr int kLabelGapPx    = 4;   // space between dot edge and label edge
 constexpr int kDotBboxPadPx  = 1;
 
+constexpr float kStationLabelScale = 0.80f;
+constexpr float kFreshnessScale    = 0.60f;
+
 // Label placement: cand=0 is the default (below the dot, no leader).
 // Any other slot gets a thin leader line back to the dot.
 struct Placement {
@@ -412,7 +415,7 @@ void leaderEndpoint(int dot_x, int dot_y, int label_x, int label_y,
 // need. Keeps the two paths from drifting.
 void configureLabelFont(lgfx::LGFXBase& gfx) {
   displayFontEnsureLoaded(gfx);
-  gfx.setTextSize(0.80f);
+  gfx.setTextSize(kStationLabelScale);
   gfx.setTextDatum(textdatum_t::top_center);
 }
 
@@ -452,9 +455,9 @@ void drawStations(lgfx::LGFXBase& gfx) {
 
 void drawFreshness(lgfx::LGFXBase& gfx) {
   const unsigned long last = services::weather::lastUpdateMs();
-  gfx.setTextSize(0.50f);
+  gfx.setTextSize(kFreshnessScale);
   gfx.setTextDatum(textdatum_t::top_center);
-  gfx.setTextColor(radar::kColorGrid, radar::kColorBackground);
+  gfx.setTextColor(radar::kColorLabel, radar::kColorBackground);
   char buf[24];
   if (last == 0) {
     std::strncpy(buf, "no data", sizeof(buf) - 1);

@@ -292,7 +292,7 @@ function drawFreshness(ctx: CanvasRenderingContext2D): void {
   ctx.font = "9px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillStyle = COLORS.grid;
+  ctx.fillStyle = COLORS.label;
   ctx.fillText(formatFreshness(lastUpdateMs()), CENTER_X, 8);
 }
 
