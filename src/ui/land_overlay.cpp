@@ -4,6 +4,7 @@
 #include "data/tile_reader.h"
 #include "data/tile_store.h"
 #include "geo/ear_clip.h"
+#include "geo/poly_scratch.h"
 #include "services/radar_location.h"
 #include "ui/layer_style.h"
 #include "ui/map_projection.hpp"
@@ -20,9 +21,14 @@ namespace {
 //     ~30-100 verts and the ~500-vert worst case seen in continental
 //     coastline polygons at this zoom.
 constexpr size_t kMaxPolyVerts = 1024;
-static geo::Vertex s_polyVerts[kMaxPolyVerts];
-static uint16_t s_earClipScratch[2 * kMaxPolyVerts];
-static uint16_t s_triBuf[3 * (kMaxPolyVerts - 2)];
+// Ear-clip scratch is now shared via geo::scratch (include/geo/poly_scratch.h);
+// three overlays used to duplicate 18 KB of BSS each — consolidating frees
+// ~36 KB of heap ceiling for mbedTLS's ~52 KB per-fetch working set.
+using geo::scratch::earClip;
+using geo::scratch::triBuf;
+using geo::scratch::verts;
+static_assert(kMaxPolyVerts <= geo::scratch::kMaxVerts,
+              "shared scratch pool too small for this overlay");
 
 // Draw one tile land polygon by ear-clipping and filling the
 // resulting triangles.
@@ -33,22 +39,22 @@ void drawPolygon(lgfx::LGFXBase& gfx, const data::tile::PolylineView& view,
   for (uint16_t i = 0; i < view.point_count; ++i) {
     int32_t lat_e7 = 0, lon_e7 = 0;
     view.getPoint(i, &lat_e7, &lon_e7);
-    s_polyVerts[i].x = lon_e7;
-    s_polyVerts[i].y = lat_e7;
+    verts[i].x = lon_e7;
+    verts[i].y = lat_e7;
   }
   const int tri_count = geo::triangulate(
-      s_polyVerts, view.point_count, s_triBuf, sizeof(s_triBuf) / sizeof(s_triBuf[0]),
-      s_earClipScratch);
+      verts, view.point_count, triBuf, sizeof(triBuf) / sizeof(triBuf[0]),
+      earClip);
   if (tri_count <= 0) return;
   for (int t = 0; t < tri_count; ++t) {
     int x[3];
     int y[3];
     for (int k = 0; k < 3; ++k) {
-      const uint16_t vi = s_triBuf[t * 3 + k];
+      const uint16_t vi = triBuf[t * 3 + k];
       // ear_clip stored lat_e7 as .y, lon_e7 as .x — recover for the
       // equirectangular projection.
-      proj::latLonToScreen(proj::e7ToDeg(s_polyVerts[vi].y),
-                            proj::e7ToDeg(s_polyVerts[vi].x),
+      proj::latLonToScreen(proj::e7ToDeg(verts[vi].y),
+                            proj::e7ToDeg(verts[vi].x),
                             &x[k], &y[k]);
     }
     // Quick reject same as the baked path — all 3 verts off the same

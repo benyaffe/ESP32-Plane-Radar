@@ -23,7 +23,10 @@ namespace {
 // existing Netlify deploy — the tile files land at radar.benyaffe.com
 // via the deploy-web workflow, no additional infra.
 constexpr const char* kTileHostAndPath = "https://radar.benyaffe.com/data/tiles";
-constexpr unsigned long kFetchTimeoutMs = 10000;
+// 3 s (down from 10 s). Tile fetches are rare (only when home moves)
+// so the timeout hurts less than ADS-B, but same reasoning: blocking
+// loop() longer than a couple seconds makes the button feel dead.
+constexpr unsigned long kFetchTimeoutMs = 3000;
 constexpr size_t kMaxTileBytes = 128 * 1024;  // matches services::tile_cache
 
 // State: last successful fetch key. Guarded by shouldFetch().
@@ -53,6 +56,7 @@ bool downloadTile(uint8_t z, uint16_t x, uint16_t y) {
 
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(kFetchTimeoutMs);
 
   HTTPClient http;
   http.setTimeout(kFetchTimeoutMs);
@@ -92,18 +96,53 @@ bool downloadTile(uint8_t z, uint16_t x, uint16_t y) {
     std::free(buf);
     return false;
   }
-  const bool ok = data::tile::store().put(z, x, y, buf, content_length);
+  // Persist to SPIFFS while `buf` is still valid (we own it here).
+  services::tile_cache::persist(z, x, y, buf, content_length);
+  // Hand buf off to the store — no memcpy, no second malloc. Store owns
+  // it from here on; must NOT std::free() after this call.
+  // putOwning takes buf on success and frees it on failure. Either way,
+  // we must NOT call std::free(buf) after this — that was the whole point
+  // of switching from put() to putOwning().
+  const bool ok = data::tile::store().putOwning(z, x, y, buf, content_length);
   if (ok) {
-    services::tile_cache::persist(z, x, y, buf, content_length);
     Serial.printf("tile_fetch: got %s (%d bytes)\n", url, content_length);
   }
-  std::free(buf);
   return ok;
 }
 
 #endif  // !USE_NATIVE
 
 }  // namespace
+
+bool fetchHomeTileSync() {
+#ifdef USE_NATIVE
+  return true;
+#else
+  if (WiFi.status() != WL_CONNECTED) return false;
+  const uint8_t z = data::tile::kRenderZoom;
+  uint16_t x = 0, y = 0;
+  data::tile::tileOfLatLon(z, services::location::lat(),
+                            services::location::lon(), &x, &y);
+  // Already in the RAM cache (either hydrated from SPIFFS or just fetched)?
+  const auto probe = data::tile::store().get(z, x, y);
+  if (!probe.is_fallback) {
+    s_have_last = true;
+    s_last_z = z; s_last_x = x; s_last_y = y;
+    s_pending_retry = false;
+    return true;
+  }
+  // Fresh fetch — heap is presumed clean here (caller responsibility).
+  if (downloadTile(z, x, y)) {
+    s_have_last = true;
+    s_last_z = z; s_last_x = x; s_last_y = y;
+    s_pending_retry = false;
+    return true;
+  }
+  s_pending_retry = true;
+  s_next_retry_ms = millis() + kRetryBackoffMs;
+  return false;
+#endif
+}
 
 bool shouldFetch(uint8_t z, double lat, double lon,
                   uint8_t last_z, uint16_t last_x, uint16_t last_y,

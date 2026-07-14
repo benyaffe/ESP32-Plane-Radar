@@ -23,7 +23,12 @@ namespace {
 constexpr char kApiBase[] = "https://opendata.adsb.fi/api/v3/lat/";
 constexpr float kKmPerNm = 1.852f;
 constexpr int kConnectAttemptMs = 200;
-constexpr unsigned long kRequestTimeoutMs = 10000;
+// 3 s (down from 10 s). loop() is single-threaded — while a fetch is
+// blocking, button presses queue up and view switches feel like they
+// hang for the timeout. 3 s is long enough for a healthy TLS handshake
+// + response, short enough that a failure doesn't make the device feel
+// broken. Failures retry on the next tick.
+constexpr unsigned long kRequestTimeoutMs = 3000;
 
 Aircraft s_aircraft[kMaxAircraft];
 size_t s_aircraft_count = 0;
@@ -62,7 +67,12 @@ void ensureFilterBuilt() {
   s_filter_built = true;
 }
 
-constexpr size_t kMinFreeHeapForFetch = 50000;
+// Empirically tuned: after the 8bpp sprite (58 KB) and boot-time tile fetch
+// (27 KB retained), steady-state free heap is ~46 KB. A successful mbedTLS
+// handshake needs ~40 KB contiguous. 35 KB gives us a chance at ADS-B
+// success without gating every fetch. If a specific fetch fails mid-stream
+// (NoMemory), we simply retry on the next tick — no crash.
+constexpr size_t kMinFreeHeapForFetch = 35000;
 
 void pollNetwork() {
   if (s_poll_fn != nullptr) {
@@ -275,6 +285,11 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
 
   WiFiClientSecure client;
   client.setInsecure();
+  // Cap the TLS handshake time so a slow / unreachable server can't
+  // stall the main loop for the mbedTLS default (30 s). loop() is
+  // single-threaded — every second we block here is a second the
+  // BOOT button feels dead.
+  client.setHandshakeTimeout(kRequestTimeoutMs);
 
   HTTPClient http;
   if (!http.begin(client, url)) {

@@ -3,11 +3,10 @@
 // water-color holes carved into the land tint. Rivers are polylines
 // (Section::Coast) and are drawn separately by ui::coastline::draw.
 //
-// The ear-clip machinery is duplicated from land_overlay.cpp because
-// the scratch buffers are static-file-local (single-threaded Arduino
-// loop keeps that safe). Sharing them would require a shared header
-// and a call-site convention — that's more surface than a 60-line
-// duplication saves.
+// Ear-clip scratch is shared across land / water / weather-map overlays via
+// geo::scratch (include/geo/poly_scratch.h) — three separate 18 KB BSS pools
+// added up to 54 KB, which is what pushed mbedTLS's ~52 KB per-fetch working
+// set past the heap ceiling.
 
 #include "ui/water_overlay.h"
 
@@ -15,6 +14,7 @@
 #include "data/tile_reader.h"
 #include "data/tile_store.h"
 #include "geo/ear_clip.h"
+#include "geo/poly_scratch.h"
 #include "services/radar_location.h"
 #include "ui/layer_style.h"
 #include "ui/map_projection.hpp"
@@ -24,9 +24,11 @@ namespace ui::water {
 namespace {
 
 constexpr size_t kMaxPolyVerts = 1024;
-static geo::Vertex s_polyVerts[kMaxPolyVerts];
-static uint16_t s_earClipScratch[2 * kMaxPolyVerts];
-static uint16_t s_triBuf[3 * (kMaxPolyVerts - 2)];
+using geo::scratch::earClip;
+using geo::scratch::triBuf;
+using geo::scratch::verts;
+static_assert(kMaxPolyVerts <= geo::scratch::kMaxVerts,
+              "shared scratch pool too small for this overlay");
 
 void drawPolygon(lgfx::LGFXBase& gfx, const data::tile::PolylineView& view,
                  uint16_t color) {
@@ -34,20 +36,20 @@ void drawPolygon(lgfx::LGFXBase& gfx, const data::tile::PolylineView& view,
   for (uint16_t i = 0; i < view.point_count; ++i) {
     int32_t lat_e7 = 0, lon_e7 = 0;
     view.getPoint(i, &lat_e7, &lon_e7);
-    s_polyVerts[i].x = lon_e7;
-    s_polyVerts[i].y = lat_e7;
+    verts[i].x = lon_e7;
+    verts[i].y = lat_e7;
   }
   const int tri_count = geo::triangulate(
-      s_polyVerts, view.point_count, s_triBuf, sizeof(s_triBuf) / sizeof(s_triBuf[0]),
-      s_earClipScratch);
+      verts, view.point_count, triBuf, sizeof(triBuf) / sizeof(triBuf[0]),
+      earClip);
   if (tri_count <= 0) return;
   for (int t = 0; t < tri_count; ++t) {
     int x[3];
     int y[3];
     for (int k = 0; k < 3; ++k) {
-      const uint16_t vi = s_triBuf[t * 3 + k];
-      proj::latLonToScreen(proj::e7ToDeg(s_polyVerts[vi].y),
-                            proj::e7ToDeg(s_polyVerts[vi].x),
+      const uint16_t vi = triBuf[t * 3 + k];
+      proj::latLonToScreen(proj::e7ToDeg(verts[vi].y),
+                            proj::e7ToDeg(verts[vi].x),
                             &x[k], &y[k]);
     }
     if ((x[0] < 0 && x[1] < 0 && x[2] < 0) ||

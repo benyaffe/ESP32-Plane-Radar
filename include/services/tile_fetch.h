@@ -24,6 +24,14 @@ namespace services::tile_fetch {
 // key. Kicks off a fetch when they differ.
 void loop();
 
+// Synchronous single-shot fetch of the tile covering the current home
+// location. Bypasses the retry back-off — intended for boot-time use
+// while the heap is still fresh (before sprite allocation) so the 27 KB
+// tile buffer can find contiguous room alongside mbedTLS's 52 KB
+// working set. Returns true if the tile was persisted or already cached.
+// No-op / true if the tile is already in the cache from SPIFFS hydrate.
+bool fetchHomeTileSync();
+
 // Pure helper — has the saved location moved to a different tile at
 // zoom `z` since the last-recorded (x, y)? Returns true on first call
 // (never fetched), and when the tile key changes. Exposed for testing.

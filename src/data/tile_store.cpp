@@ -102,6 +102,33 @@ bool TileStore::put(uint8_t z, uint16_t x, uint16_t y,
   return true;
 }
 
+bool TileStore::putOwning(uint8_t z, uint16_t x, uint16_t y,
+                          uint8_t* data, size_t size) {
+  if (data == nullptr || size == 0) {
+    if (data != nullptr) std::free(data);
+    return false;
+  }
+  int slot = findEntry(z, x, y);
+  if (slot < 0) {
+    slot = findLruSlot();
+  }
+  Entry& e = entries_[slot];
+  // Free any previous buffer at this slot (either an evicted LRU entry
+  // or the same key being refreshed).
+  if (e.buffer != nullptr) {
+    std::free(e.buffer);
+    e.buffer = nullptr;
+  }
+  e.buffer = data;  // take ownership — no memcpy, no second malloc
+  e.used = true;
+  e.z = z;
+  e.x = x;
+  e.y = y;
+  e.size = size;
+  e.last_used_tick = ++tick_;
+  return true;
+}
+
 size_t TileStore::cachedCount() const {
   size_t n = 0;
   for (const auto& e : entries_) {

@@ -66,6 +66,15 @@ class TileStore {
   bool put(uint8_t z, uint16_t x, uint16_t y,
            const uint8_t* data, size_t size);
 
+  // Take-ownership variant. `data` MUST be heap-allocated via std::malloc()
+  // (or equivalent); TileStore takes ownership and frees it on eviction /
+  // shutdown. Caller must not std::free() `data` afterwards.
+  // Frees `data` and returns false on any pre-condition failure (nullptr /
+  // zero size). Never memcpy's — kills the 27-KB double-allocation window
+  // that was tipping the ESP32-C3 heap past its fetch guard.
+  bool putOwning(uint8_t z, uint16_t x, uint16_t y,
+                 uint8_t* data, size_t size);
+
   // How many cache slots currently hold a fetched tile. Fallback is
   // not counted.
   size_t cachedCount() const;

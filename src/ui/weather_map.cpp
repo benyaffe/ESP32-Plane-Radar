@@ -9,6 +9,7 @@
 #include "data/tile_reader.h"
 #include "data/tile_store.h"
 #include "geo/ear_clip.h"
+#include "geo/poly_scratch.h"
 #include "hardware/display.h"
 #include "hardware/display_font.h"
 #include "services/metar_config.h"
@@ -137,14 +138,15 @@ bool bboxOverlapsScreen(int min_x, int max_x, int min_y, int max_y) {
   return true;
 }
 
-// Ear-clip scratch shared by land polygon triangulation. Sized to
-// match land_overlay.cpp — the weather map draws from the same z=7
-// tiles at the same 0.002° simplification, so worst-case polygon
-// vertex counts are identical.
+// Ear-clip scratch is shared with land / water via geo::scratch (see
+// include/geo/poly_scratch.h). Three separate 18 KB BSS pools were what
+// pushed mbedTLS past the heap ceiling during ADS-B / tile fetches.
 constexpr size_t kMaxPolyVerts = 1024;
-static geo::Vertex s_polyVerts[kMaxPolyVerts];
-static uint16_t s_earClipScratch[2 * kMaxPolyVerts];
-static uint16_t s_triBuf[3 * (kMaxPolyVerts - 2)];
+using geo::scratch::earClip;
+using geo::scratch::triBuf;
+using geo::scratch::verts;
+static_assert(kMaxPolyVerts <= geo::scratch::kMaxVerts,
+              "shared scratch pool too small for this overlay");
 
 // Enumerate the (up to 4) z=7 tiles that cover the weather map's
 // current viewport. Center + radius maps to a bbox of ±radius_km in
@@ -187,18 +189,18 @@ void drawTileLandPolygon(lgfx::LGFXBase& gfx,
     view.getPoint(i, &lat_e7, &lon_e7);
     // ear_clip treats .x/.y as flat coords — pack lon into x, lat into
     // y so the winding test matches an equirectangular projection.
-    s_polyVerts[i].x = lon_e7;
-    s_polyVerts[i].y = lat_e7;
+    verts[i].x = lon_e7;
+    verts[i].y = lat_e7;
   }
   const int tri_count = geo::triangulate(
-      s_polyVerts, view.point_count, s_triBuf,
-      sizeof(s_triBuf) / sizeof(s_triBuf[0]), s_earClipScratch);
+      verts, view.point_count, triBuf,
+      sizeof(triBuf) / sizeof(triBuf[0]), earClip);
   if (tri_count <= 0) return;
   for (int t = 0; t < tri_count; ++t) {
     int x[3], y[3];
     for (int k = 0; k < 3; ++k) {
-      const uint16_t vi = s_triBuf[t * 3 + k];
-      projectLatLon(s_polyVerts[vi].y * kE7, s_polyVerts[vi].x * kE7,
+      const uint16_t vi = triBuf[t * 3 + k];
+      projectLatLon(verts[vi].y * kE7, verts[vi].x * kE7,
                     &x[k], &y[k]);
     }
     const int min_x = std::min({x[0], x[1], x[2]});

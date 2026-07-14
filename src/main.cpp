@@ -169,6 +169,20 @@ void setup() {
   services::adsb::setPollFn(wifiLoop);
 
   if (wifiSetupConnect()) {
+    // Boot-time tile fetch, BEFORE showRadarIfConnected() allocates the
+    // 58 KB 8bpp sprite. Heap here is clean (~130 KB free, 60 KB+
+    // largest contiguous) — enough for the 52 KB mbedTLS + 27 KB tile
+    // buffer. Once the sprite is allocated, the largest contiguous block
+    // fragments to <10 KB during TLS handshake and the 27 KB tile alloc
+    // reliably fails. So we fetch the home tile now, persist to SPIFFS,
+    // and future boots hydrate from flash without ever hitting the wire.
+    Serial.printf("boot: pre-sprite tile fetch (heap free=%u largest=%u)\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    if (services::tile_fetch::fetchHomeTileSync()) {
+      Serial.println("boot: home tile ready");
+    } else {
+      Serial.println("boot: home tile fetch failed — will retry in main loop");
+    }
     showRadarIfConnected();
   }
 }
@@ -179,7 +193,13 @@ void loop() {
   services::tap_sensor::poll();
   handleBootButton();
   wifiLoop();
-  services::ota::loop();
+  // ArduinoOTA server disabled: on ESP32-C3 with no PSRAM the ~10 KB
+  // resident UDP/TCP listener + mDNS record was significant heap pressure.
+  // Firmware updates go through the WiFiManager /update endpoint (curl POST
+  // to http://plane-radar.local/u) instead — same effect, no always-on
+  // server. See src/services/ota_update.cpp — the setHostname NVS write
+  // path is still exposed for future re-enablement.
+  // services::ota::loop();
 
   if (WiFi.status() != WL_CONNECTED) {
     if (g_radar_visible) {

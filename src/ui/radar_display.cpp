@@ -428,7 +428,12 @@ inline bool showTrend(float vs_fpm) {
 //
 // So each mode gets a full 3 s dwell and stays put while ONE fetch happens
 // inside its window.
-constexpr unsigned long kModeToggleOffsetMs = 1500;
+// The 1500 ms offset was a nice idea (space the mode flip visually apart
+// from the position update) but rendering only happens right after each
+// successful fetch — `since` is always ~0 at that moment, so the flip
+// condition never triggered. Set to 0 so line 2 alternates on every
+// fetch cycle: alt → type → alt → type at ADS-B cadence (~3 s).
+constexpr unsigned long kModeToggleOffsetMs = 0;
 inline bool tagShowsAltitude() {
   static bool s_show_alt = true;
   static unsigned long s_toggled_at_fetch = 0;
@@ -1262,12 +1267,10 @@ bool ensureFrameSprite() {
   if (s_frame_ready) {
     return true;
   }
-  // Best-effort alloc if we didn't already claim it at boot. If we're here
-  // and the sprite still isn't ready, the tile cache and Wi-Fi stack have
-  // already taken their bites — this will typically fail. Call
-  // ui::radarDisplayPreallocSprite() early in setup() to grab the 115 KB
-  // buffer while heap is still fresh.
-  s_frame.setColorDepth(16);
+  // 8bpp palette mode: 240×240 = ~57 KB. 4bpp was tried but crashed at
+  // boot (LGFX 4bpp sprite path has issues with the render code) so we
+  // stay at 8bpp and eat the heap cost.
+  s_frame.setColorDepth(8);
   if (!s_frame.createSprite(radar::kSize, radar::kSize)) {
     Serial.println("radar: frame sprite alloc failed");
     return false;

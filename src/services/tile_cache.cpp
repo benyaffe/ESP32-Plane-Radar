@@ -70,9 +70,12 @@ void mountAndHydrate() {
     uint8_t* buf = static_cast<uint8_t*>(std::malloc(size));
     if (buf == nullptr) continue;
     if (f.read(buf, size) == size) {
-      if (data::tile::store().put(z, x, y, buf, size)) ++loaded;
+      // putOwning takes ownership; frees on failure. Kills the boot-time
+      // double-copy that used to double heap pressure per tile file.
+      if (data::tile::store().putOwning(z, x, y, buf, size)) ++loaded;
+    } else {
+      std::free(buf);
     }
-    std::free(buf);
   }
   Serial.printf("tile_cache: hydrated %d tile(s) from SPIFFS\n", loaded);
 }
