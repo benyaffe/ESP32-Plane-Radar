@@ -244,3 +244,143 @@ def build_coastline_tiles(
                 for pl in _linestring_to_tf_polylines(clipped, tol):
                     result.setdefault((z, x, y), []).append(pl)
     return result
+
+
+# ── size-cap post-processing ────────────────────────────────────────────────
+# The firmware's largest contiguous heap block hovers around 30-40 KB after
+# WiFi + 8bpp sprite + mbedTLS peak. Any tile that exceeds that dies at
+# std::malloc in tile_fetch and drops the render back to the world fallback
+# tile — no local coast/land at that focus. Rebuild dense-metro tiles
+# (NYC, London, SF Bay) with looser tolerance / dropped small polygons
+# until each fits under the cap.
+
+# Hard cap — a bit under the firmware's practical heap-block ceiling so we
+# leave room for HTTP overhead in the response.
+DEFAULT_TILE_CAP_BYTES = 32 * 1024
+
+# Sanity limit on how loose Douglas-Peucker tolerance can go before the
+# result stops resembling the original coastline. ~0.05° ≈ 5.5 km. Beyond
+# this we shift strategy to polygon-drop.
+_MAX_SIMPLIFY_TOL_DEG = 0.05
+
+
+def _resimplify_polyline(p: tf.Polyline, tol_deg: float, closed_ring: bool) -> tf.Polyline | None:
+    """Re-simplify a Polyline at a looser tolerance. Returns None if the
+    result collapses (fewer than 2 points for a line, 3 for a ring)."""
+    pts = p.points
+    if len(pts) < 2:
+        return p
+    try:
+        if closed_ring:
+            # Ensure closed for Polygon()
+            ring = list(pts)
+            if ring[0] != ring[-1]:
+                ring = ring + [ring[0]]
+            if len(ring) < 4:
+                return None
+            geom = Polygon(ring)
+            simplified = geom.simplify(tol_deg, preserve_topology=True)
+            if simplified.is_empty:
+                return None
+            if isinstance(simplified, Polygon):
+                out_ring = list(simplified.exterior.coords)
+            elif isinstance(simplified, MultiPolygon):
+                # Pick the largest part
+                biggest = max(simplified.geoms, key=lambda g: g.area)
+                out_ring = list(biggest.exterior.coords)
+            else:
+                return None
+            # Drop the closing dup — tile_format polylines are OPEN
+            if len(out_ring) >= 4 and out_ring[0] == out_ring[-1]:
+                out_ring = out_ring[:-1]
+            if len(out_ring) < 3:
+                return None
+            return tf.Polyline([(float(x), float(y)) for x, y in out_ring])
+        else:
+            geom = LineString(pts)
+            simplified = geom.simplify(tol_deg, preserve_topology=True)
+            if simplified.is_empty:
+                return None
+            if isinstance(simplified, LineString):
+                out_pts = list(simplified.coords)
+            elif isinstance(simplified, MultiLineString):
+                biggest = max(simplified.geoms, key=lambda g: g.length)
+                out_pts = list(biggest.coords)
+            else:
+                return None
+            if len(out_pts) < 2:
+                return None
+            return tf.Polyline([(float(x), float(y)) for x, y in out_pts])
+    except Exception:
+        return p  # if simplification blows up, keep original
+
+
+def _resimplify_tile_at(tile: tf.Tile, tol_deg: float) -> tf.Tile:
+    """Return a new Tile with land/water treated as closed rings and coast
+    as open lines, all re-simplified at `tol_deg`."""
+    new_coast = [q for q in
+                 (_resimplify_polyline(p, tol_deg, closed_ring=False) for p in tile.coast)
+                 if q is not None]
+    new_land = [q for q in
+                (_resimplify_polyline(p, tol_deg, closed_ring=True) for p in tile.land)
+                if q is not None]
+    new_water = [q for q in
+                 (_resimplify_polyline(p, tol_deg, closed_ring=True) for p in tile.water)
+                 if q is not None]
+    return tf.Tile(z=tile.z, x=tile.x, y=tile.y,
+                   coast=new_coast, land=new_land, water=new_water,
+                   airports=tile.airports)
+
+
+def _drop_smallest_until_fits(tile: tf.Tile, cap_bytes: int) -> tf.Tile:
+    """Drop polylines from land → water → coast (in that order) starting
+    with the fewest vertices until encoded size fits under cap. Airports
+    are cheap so they're never dropped."""
+    def bytes_for(t: tf.Tile) -> int:
+        return len(tf.encode(t))
+
+    # Sort each layer by vertex count ascending — smallest first (easiest to drop).
+    coast = sorted(tile.coast, key=lambda p: len(p.points))
+    land = sorted(tile.land, key=lambda p: len(p.points))
+    water = sorted(tile.water, key=lambda p: len(p.points))
+    # Drop order: water first (least visually critical), then coast, then land
+    # (land is the biggest visual signal — save for last).
+    drop_targets = [water, coast, land]
+    for target in drop_targets:
+        while target and bytes_for(tf.Tile(
+                z=tile.z, x=tile.x, y=tile.y,
+                coast=coast, land=land, water=water,
+                airports=tile.airports)) > cap_bytes:
+            target.pop(0)  # remove smallest
+        if bytes_for(tf.Tile(
+                z=tile.z, x=tile.x, y=tile.y,
+                coast=coast, land=land, water=water,
+                airports=tile.airports)) <= cap_bytes:
+            break
+    return tf.Tile(z=tile.z, x=tile.x, y=tile.y,
+                   coast=coast, land=land, water=water,
+                   airports=tile.airports)
+
+
+def cap_tile_size(tile: tf.Tile, cap_bytes: int = DEFAULT_TILE_CAP_BYTES) -> tuple[tf.Tile, str]:
+    """Return `(tile_or_smaller, reason)`. `reason` is 'ok' if already
+    under cap, 'simplify:<tol>' if fixed by simplification at that
+    tolerance, or 'drop' if polygon-dropping was needed. If nothing worked
+    the tile is returned oversized — caller can log and move on."""
+    if len(tf.encode(tile)) <= cap_bytes:
+        return tile, "ok"
+
+    # Start at zoom's baseline tolerance × 2 and keep doubling.
+    tol = ts.SIMPLIFY_TOL_DEG.get(tile.z, 0.001) * 2
+    while tol <= _MAX_SIMPLIFY_TOL_DEG:
+        candidate = _resimplify_tile_at(tile, tol)
+        if len(tf.encode(candidate)) <= cap_bytes:
+            return candidate, f"simplify:{tol:.5f}"
+        tile = candidate  # keep progressively coarser as base for next round
+        tol *= 2
+
+    # Even at max tolerance still oversized — drop smallest polygons.
+    dropped = _drop_smallest_until_fits(tile, cap_bytes)
+    if len(tf.encode(dropped)) <= cap_bytes:
+        return dropped, "drop"
+    return dropped, "oversized"

@@ -137,14 +137,34 @@ def build_all_tiles(
 
 def write_tiles(tiles: list[tf.Tile], out_dir: Path = OUT_DIR) -> tuple[int, int]:
     """Serialize each tile to `out_dir/tiles/{z}/{x}/{y}.bin`. Returns
-    (tile_count, total_bytes)."""
+    (tile_count, total_bytes).
+
+    Each tile passes through `tsh.cap_tile_size` first — dense-metro tiles
+    (KLGA, EGLL, etc.) that would otherwise blow past the firmware's
+    ~32 KB per-tile heap budget get re-simplified at looser tolerance
+    (and, in extreme cases, have their smallest polygons dropped) so the
+    on-device fetch always succeeds. Logs per-tile action counts so
+    accidental over-shrinking is visible in the build output.
+    """
     total = 0
+    action_counts: dict[str, int] = {}
     for tile in tiles:
-        path = out_dir / ts.tile_relative_path(tile.z, tile.x, tile.y)
+        capped, reason = tsh.cap_tile_size(tile, tsh.DEFAULT_TILE_CAP_BYTES)
+        action_counts[reason.split(":", 1)[0]] = action_counts.get(
+            reason.split(":", 1)[0], 0) + 1
+        if reason == "oversized":
+            print(
+                f"warn: tile {tile.z}/{tile.x}/{tile.y} still oversized "
+                f"after simplify+drop ({len(tf.encode(capped))} bytes)",
+                file=sys.stderr,
+            )
+        path = out_dir / ts.tile_relative_path(capped.z, capped.x, capped.y)
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = tf.encode(tile)
+        data = tf.encode(capped)
         path.write_bytes(data)
         total += len(data)
+    summary = ", ".join(f"{k}={v}" for k, v in sorted(action_counts.items()))
+    print(f"tile size cap: {summary}", file=sys.stderr)
     return len(tiles), total
 
 
