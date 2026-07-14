@@ -40,13 +40,15 @@ constexpr char kCustomHead[] = R"HTML(<style>
 .pr-hit:hover{background:#e8f4fe}
 .pr-hit:last-child{border-bottom:0}
 .pr-chips{display:flex;flex-direction:column;gap:6px;margin:4px 0}
-.pr-chip{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px;border:1px solid #ccc;border-radius:.3rem;padding:6px 8px;background:#f4f7fa}
-.pr-chip-row{display:flex;flex-direction:row;align-items:center;gap:6px;flex:1 1 auto;min-width:0;width:100%}
-.pr-chip-name{flex:1 1 auto;min-width:0;border:0;background:transparent;font-weight:700;font-size:1em;padding:2px 4px;box-sizing:border-box}
-.pr-chip-name:focus{outline:1px solid #1fa3ec;border-radius:2px;background:#fff}
-.pr-chip-range{width:5.2em;padding:2px 4px;font-size:.9em;margin:0}
-.pr-chip-rm{padding:2px 10px;background:#dc3630;color:#fff;border:0;border-radius:.3rem;cursor:pointer;font-size:1em;line-height:1;flex:0 0 auto}
-.pr-chip-sub{width:100%;color:#555;font-size:.8em;padding:0 4px;line-height:1.3;word-break:break-word}
+/* WiFiManager's stylesheet sets `input,button,select { width:100% }` — !important
+   overrides are needed here or the range dropdown / remove button balloon to full
+   width and squash the name input to zero. */
+.pr-chip{display:flex;flex-wrap:wrap;align-items:center;gap:6px;border:1px solid #ccc;border-radius:.3rem;padding:6px 8px;background:#f4f7fa}
+.pr-chip-name{flex:1 1 auto !important;min-width:6em;width:auto !important;border:0 !important;background:transparent !important;font-weight:700;font-size:1em;padding:2px 4px !important;margin:0 !important;box-sizing:border-box}
+.pr-chip-name:focus{outline:1px solid #1fa3ec;border-radius:2px;background:#fff !important}
+.pr-chip-range{flex:0 0 5.5em !important;width:5.5em !important;padding:2px 4px !important;font-size:.9em;margin:0 !important}
+.pr-chip-rm{flex:0 0 auto !important;width:auto !important;padding:2px 10px !important;background:#dc3630 !important;color:#fff !important;border:0 !important;border-radius:.3rem !important;cursor:pointer;font-size:1em;line-height:1;margin:0 !important}
+.pr-chip-sub{flex:0 0 100%;width:100%;color:#555;font-size:.8em;padding:0 4px;line-height:1.3;word-break:break-word;margin:0 !important}
 .pr-chip-empty{color:#888;font-style:italic;padding:6px 4px}
 .pr-saved{background:#5cb85c;color:#fff;padding:12px;border-radius:.3rem;margin-bottom:12px;font-weight:700;text-align:center;transition:opacity .5s}
 .pr-error{background:#dc3630;color:#fff;padding:12px;border-radius:.3rem;margin-bottom:12px;font-weight:700;text-align:center}
@@ -243,11 +245,9 @@ function decorateFocusEditor(field){
       var chip=el("span",{"class":"pr-chip","data-i":i});
       var opts=rng.map(function(nm,ri){return '<option value="'+ri+'"'+(ri===(e.range_idx|0)?" selected":"")+">"+nm+" nm</option>";}).join("");
       chip.innerHTML=
-        '<div class="pr-chip-row">'+
-          '<input class="pr-chip-name" value="'+esc(e.name)+'" maxlength="15" autocapitalize="off" autocorrect="off" spellcheck="false">'+
-          '<select class="pr-chip-range">'+opts+'</select>'+
-          '<button type="button" class="pr-chip-rm" title="Remove">×</button>'+
-        '</div>'+
+        '<input class="pr-chip-name" value="'+esc(e.name)+'" maxlength="15" autocapitalize="off" autocorrect="off" spellcheck="false">'+
+        '<select class="pr-chip-range">'+opts+'</select>'+
+        '<button type="button" class="pr-chip-rm" title="Remove">×</button>'+
         (e._sub?'<div class="pr-chip-sub">'+esc(e._sub)+'</div>':'');
       chip.querySelector(".pr-chip-name").addEventListener("input",function(ev){arr[i].name=ev.target.value;ser();});
       chip.querySelector(".pr-chip-range").addEventListener("change",function(ev){arr[i].range_idx=+ev.target.value;ser();});
