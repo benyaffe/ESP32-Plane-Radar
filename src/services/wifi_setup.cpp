@@ -1,5 +1,9 @@
 #include "services/wifi_setup.h"
 
+#include "services/portal_customization.h"
+
+#include <vector>
+
 #include <WiFi.h>
 #include <WiFiManager.h>
 
@@ -76,6 +80,13 @@ void applyTzAndStartSntp() {
 bool s_force_config_portal = false;
 WiFiManager s_wm;
 bool s_wm_configured = false;
+// Latched once we've attached the coord/METAR/focus/hostname/runways params
+// to the WiFiManager instance for the LAN portal. Not attached during the
+// captive setup portal — that surface is stripped to just Wi-Fi credentials
+// so first-time setup doesn't overwhelm the user with fields that only make
+// sense once the device is online. A full BOOT-hold reset reboots the ESP,
+// so this bool naturally resets to false on the next captive boot.
+bool s_lan_extras_attached = false;
 
 void ensureWifiManager();
 void startLanWebPortal();
@@ -172,7 +183,12 @@ void onPortalParamsSaved() {
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 }
 
-void attachPortalParams(WiFiManager& wm) {
+// LAN-only params. The captive portal deliberately shows just Wi-Fi so the
+// first-time setup flow is "pick network, type password, done" — everything
+// below only makes sense once the device is online and the browser has the
+// full internet to do address lookups and airport searches against.
+void attachLanExtraParams(WiFiManager& wm) {
+  if (s_lan_extras_attached) return;
   refreshPortalParamDefaults();
   wm.addParameter(&s_param_lat);
   wm.addParameter(&s_param_lon);
@@ -183,6 +199,12 @@ void attachPortalParams(WiFiManager& wm) {
   wm.addParameter(&s_param_hostname);
   wm.addParameter(&s_param_runways);
   wm.setSaveParamsCallback(onPortalParamsSaved);
+  // LAN menu: 'param' becomes visible because we now have params to show.
+  // 'update' stays available for OTA firmware upload.
+  static const char* lan_menu[] = {"wifi", "param", "info", "update", "exit"};
+  std::vector<const char*> menu(lan_menu, lan_menu + 5);
+  wm.setMenu(menu);
+  s_lan_extras_attached = true;
 }
 
 void markForceConfigPortal() {
@@ -292,7 +314,33 @@ void ensureWifiManager() {
                            IPAddress(255, 255, 255, 0));
   s_wm.setHostname(config::kPortalHostname);
   s_wm.setAPCallback(onConfigPortalApStarted);
-  attachPortalParams(s_wm);
+  // Inject the shared HTML/JS enhancement into every portal page:
+  //   - always: kill iOS auto-caps on password fields
+  //   - LAN /param page: install address+airport search, focus editor, and
+  //     one-shot IP-geolocation auto-populate for empty coords
+  s_wm.setCustomHeadElement(plane_radar::portal::kCustomHead);
+  // Serve the embedded gzipped airport typeahead index at /data/airport_index.json.
+  // Runs before WiFiManager registers its own routes so ours takes precedence.
+  s_wm.setWebServerCallback([]() {
+    if (!s_wm.server) return;
+    s_wm.server->on("/data/airport_index.json", []() {
+      const size_t len = static_cast<size_t>(
+          _binary_data_airport_index_json_gz_end -
+          _binary_data_airport_index_json_gz_start);
+      s_wm.server->sendHeader("Content-Encoding", "gzip");
+      s_wm.server->sendHeader("Cache-Control", "public, max-age=86400");
+      s_wm.server->send_P(
+          200, "application/json",
+          reinterpret_cast<const char*>(_binary_data_airport_index_json_gz_start),
+          len);
+    });
+  });
+  // Captive-portal menu: no 'param' (no LAN params attached yet), but keep
+  // 'update' so a bad OTA can be recovered via captive-portal firmware upload
+  // without needing a USB cable and esptool.
+  static const char* captive_menu[] = {"wifi", "info", "update", "exit"};
+  std::vector<const char*> menu(captive_menu, captive_menu + 4);
+  s_wm.setMenu(menu);
   s_wm_configured = true;
 }
 
@@ -301,6 +349,7 @@ void startLanWebPortal() {
       s_wm.getConfigPortalActive()) {
     return;
   }
+  attachLanExtraParams(s_wm);
   refreshPortalParamDefaults();
   WiFi.mode(WIFI_STA);
   s_wm.setConfigPortalBlocking(false);

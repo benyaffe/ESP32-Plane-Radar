@@ -24,6 +24,7 @@ flag.
 from __future__ import annotations
 
 import csv
+import gzip
 import io
 import json
 import sys
@@ -35,6 +36,7 @@ from tile_airports import iap_idents_from_openflight_data  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "web" / "public" / "data"
+FIRMWARE_OUT_DIR = ROOT / "data"
 
 AIRPORTS_URL = (
     "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/"
@@ -111,13 +113,32 @@ def build_airport_index() -> list[list[object]]:
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    FIRMWARE_OUT_DIR.mkdir(parents=True, exist_ok=True)
     index = build_airport_index()
-    out_path = OUT_DIR / "airport_index.json"
-    out_path.write_text(json.dumps(index, separators=(",", ":")))
-    size = out_path.stat().st_size
+    payload = json.dumps(index, separators=(",", ":")).encode("utf-8")
+
+    web_path = OUT_DIR / "airport_index.json"
+    web_path.write_bytes(payload)
     print(
-        f"wrote {out_path.relative_to(ROOT)} ({len(index)} airports, "
-        f"{size/1024:.1f} KB)",
+        f"wrote {web_path.relative_to(ROOT)} ({len(index)} airports, "
+        f"{len(payload)/1024:.1f} KB)",
+        file=sys.stderr,
+    )
+
+    # Firmware embed via board_build.embed_files. Trimmed row shape to keep the
+    # flash footprint reasonable: drop the airport `name` and `iap` columns —
+    # the LAN portal search only needs ICAO + IATA + city + coords to match a
+    # user's typed query and populate a lat/lon field.
+    #   Full (web):     [icao, iata, city, name, lat, lon, iap]
+    #   Trimmed (fw):   [icao, iata, city, lat, lon]
+    fw_index = [[row[0], row[1], row[2], row[4], row[5]] for row in index]
+    fw_payload = json.dumps(fw_index, separators=(",", ":")).encode("utf-8")
+    fw_path = FIRMWARE_OUT_DIR / "airport_index.json.gz"
+    gz_bytes = gzip.compress(fw_payload, compresslevel=9)
+    fw_path.write_bytes(gz_bytes)
+    print(
+        f"wrote {fw_path.relative_to(ROOT)} ({len(gz_bytes)/1024:.1f} KB gz, "
+        f"trimmed to 5 cols)",
         file=sys.stderr,
     )
 
