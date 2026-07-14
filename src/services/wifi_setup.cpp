@@ -35,6 +35,15 @@ portMUX_TYPE s_boot_mux = portMUX_INITIALIZER_UNLOCKED;
 // would only see one — dispatched as Single. Counter preserves each
 // hardware-detected tap edge; consumer decrements one at a time.
 volatile uint8_t s_boot_tap_pending = 0;
+// ISR-captured timestamp of the most recent tap RELEASE. Consumer reads
+// this in the same atomic block as s_boot_tap_pending so the multi-tap
+// window is measured from when the tap PHYSICALLY happened, not from
+// when the main loop got around to processing it. Matters because the
+// ADS-B fetch can stall loop() for up to 3 s; the old code
+// (`s_last_tap_ms = millis()` in the consumer) started the 500 ms
+// double-tap window from the post-stall moment, so a real double-tap
+// straddling the stall got classified as two singles.
+volatile unsigned long s_boot_last_tap_ms = 0;
 volatile bool s_boot_is_down = false;
 volatile unsigned long s_boot_down_ms = 0;
 bool s_long_press_handled = false;
@@ -52,6 +61,7 @@ void IRAM_ATTR onBootButtonIsr() {
     if (held >= config::kBootTapMinMs && held < config::kBootResetHoldMs) {
       // Cap at 3 — anything more and the classifier discards anyway.
       if (s_boot_tap_pending < 3) ++s_boot_tap_pending;
+      s_boot_last_tap_ms = now;
     }
     s_boot_is_down = false;
   }
@@ -597,12 +607,24 @@ BootTap bootButtonConsumeEvent() {
   static uint8_t s_pending_count = 0;
   static unsigned long s_last_tap_ms = 0;
 
-  const bool tap = bootButtonConsumeTap();
+  // Read pending count AND ISR-captured timestamp atomically. The
+  // ISR-time is what makes the window robust against fetch stalls
+  // (loop() can freeze up to 3 s during a stuck ADS-B TLS fetch — using
+  // consumer-time here would restart the double-tap window from 0 after
+  // every stall and turn real double-taps into two singles).
+  bool tap;
+  unsigned long tap_ms;
+  portENTER_CRITICAL(&s_boot_mux);
+  tap = s_boot_tap_pending > 0;
+  tap_ms = s_boot_last_tap_ms;
+  if (tap) --s_boot_tap_pending;
+  portEXIT_CRITICAL(&s_boot_mux);
+
   const unsigned long now = millis();
 
   if (tap) {
     ++s_pending_count;
-    s_last_tap_ms = now;
+    s_last_tap_ms = tap_ms;
     if (s_pending_count >= 2) {
       s_pending_count = 0;
       return BootTap::Double;

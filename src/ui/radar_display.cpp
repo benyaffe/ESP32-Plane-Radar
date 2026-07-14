@@ -1340,4 +1340,8 @@ LGFX_Sprite* radarDisplayFrameSprite() {
   return ensureFrameSprite() ? &s_frame : nullptr;
 }
 
+bool radarDisplayPreallocateFrameSprite() {
+  return ensureFrameSprite();
+}
+
 }  // namespace ui

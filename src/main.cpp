@@ -149,6 +149,18 @@ void setup() {
 
   bootButtonInit();
   displayInit();
+  // Pre-alloc the 58 KB 8bpp frame sprite HERE while the heap is still
+  // pristine (~200+ KB largest contiguous). Deferring until first render
+  // creates a race: tile fetch fragments heap with 32 KB mbedTLS record
+  // buffers, the 58 KB sprite alloc fails, and every subsequent frame
+  // falls through to the direct-panel path — visible sequential per-
+  // element repaint = flicker. Once allocated here, s_frame_ready latches
+  // for the session.
+  if (!ui::radarDisplayPreallocateFrameSprite()) {
+    Serial.printf("boot: frame sprite pre-alloc FAILED (free=%u largest=%u) "
+                  "— renders will flicker\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  }
   if (wifiShowsSetupScreenOnBoot()) {
     statusScreenPortal();
   }

@@ -17,4 +17,10 @@ void radarDisplayRefreshAircraft();
  *  (fall back to direct-to-panel draw in that case). */
 LGFX_Sprite* radarDisplayFrameSprite();
 
+/** Force-allocate the off-screen frame sprite now, so subsequent renders
+ *  don't race with heap fragmentation from tile fetches / TLS record
+ *  buffers. Call at boot before any Wi-Fi/tile work. Returns false if
+ *  the alloc failed; direct-to-panel fallback still works but flickers. */
+bool radarDisplayPreallocateFrameSprite();
+
 }  // namespace ui
