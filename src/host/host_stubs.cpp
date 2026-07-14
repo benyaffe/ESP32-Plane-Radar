@@ -236,6 +236,8 @@ static double s_override_lon = 0.0;
 void init() {}
 double lat() { return s_override_active ? s_override_lat : s_lat; }
 double lon() { return s_override_active ? s_override_lon : s_lon; }
+double homeLat() { return s_lat; }
+double homeLon() { return s_lon; }
 
 // Native saveFromStrings — the ESP32 build persists to NVS; the SDL
 // emulator persists to the in-memory `s_lat/s_lon` slot and (via

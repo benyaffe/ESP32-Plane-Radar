@@ -55,7 +55,7 @@ void buildUrl(char* url, size_t len) {
                 "&temperature_unit=fahrenheit&wind_speed_unit=kn"
                 "&timezone=auto"
                 "&forecast_days=1",
-                services::location::lat(), services::location::lon());
+                services::location::homeLat(), services::location::homeLon());
 }
 
 bool ingestPayload(const char* body, size_t body_len) {
@@ -105,8 +105,8 @@ bool ingestPayload(const char* body, size_t body_len) {
   }
   s_valid = true;
   s_last_fetch_ms = millis();
-  s_last_fetch_lat = services::location::lat();
-  s_last_fetch_lon = services::location::lon();
+  s_last_fetch_lat = services::location::homeLat();
+  s_last_fetch_lon = services::location::homeLon();
   return true;
 }
 
@@ -177,14 +177,15 @@ void loop() {
   const unsigned long now = millis();
   const unsigned long since_attempt = now - s_last_attempt_ms;
   const bool first = !s_ever_attempted;
-  // Detect home moves (WiFi portal / emulator config save) — if the
-  // location has changed since our last successful fetch, force a
-  // refresh regardless of the TTL so the cockpit's tz offset updates
-  // in seconds rather than waiting out the 15-minute cadence.
+  // Detect home moves (WiFi portal / emulator config save) — if home
+  // has changed since our last successful fetch, force a refresh
+  // regardless of the TTL so the cockpit's tz offset updates in seconds
+  // rather than waiting out the 15-minute cadence. Anchored on home (not
+  // the focus-override lat/lon) so focus cycling doesn't re-fetch OAT.
   const bool home_moved =
       s_valid &&
-      (services::location::lat() != s_last_fetch_lat ||
-       services::location::lon() != s_last_fetch_lon);
+      (services::location::homeLat() != s_last_fetch_lat ||
+       services::location::homeLon() != s_last_fetch_lon);
   const bool ok_to_retry = home_moved
                                ? true
                                : (s_valid ? (since_attempt >= kFetchIntervalMs)

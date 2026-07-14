@@ -67,6 +67,10 @@ double lat() { return s_override_active ? s_override_lat : s_lat; }
 
 double lon() { return s_override_active ? s_override_lon : s_lon; }
 
+double homeLat() { return s_lat; }
+
+double homeLon() { return s_lon; }
+
 void setOverride(double lat, double lon) {
   s_override_lat = lat;
   s_override_lon = lon;

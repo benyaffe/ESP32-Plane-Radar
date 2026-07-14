@@ -18,6 +18,8 @@
 namespace services::location {
 double lat();
 double lon();
+double homeLat();
+double homeLon();
 }  // namespace services::location
 
 namespace ui::radar {
@@ -28,6 +30,8 @@ const RangePreset& rangeCurrent();
 namespace services::location {
 double lat() { return 37.7552; }
 double lon() { return -122.4528; }
+double homeLat() { return 37.7552; }
+double homeLon() { return -122.4528; }
 }  // namespace services::location
 
 namespace ui::radar {

@@ -125,8 +125,8 @@ void drawFreshness(LGFX_Sprite& g) {
 // scan is single-tile (~50 nm across at kRenderZoom); more than enough
 // for any home location that isn't in the middle of the ocean.
 void drawReferencePosition(LGFX_Sprite& g) {
-  const double home_lat = services::location::lat();
-  const double home_lon = services::location::lon();
+  const double home_lat = services::location::homeLat();
+  const double home_lon = services::location::homeLon();
   uint16_t tx = 0, ty = 0;
   data::tile::tileOfLatLon(data::tile::kRenderZoom, home_lat, home_lon,
                             &tx, &ty);
