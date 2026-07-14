@@ -149,18 +149,6 @@ void setup() {
 
   bootButtonInit();
   displayInit();
-  // Pre-alloc the 58 KB 8bpp frame sprite HERE while the heap is still
-  // pristine (~200+ KB largest contiguous). Deferring until first render
-  // creates a race: tile fetch fragments heap with 32 KB mbedTLS record
-  // buffers, the 58 KB sprite alloc fails, and every subsequent frame
-  // falls through to the direct-panel path — visible sequential per-
-  // element repaint = flicker. Once allocated here, s_frame_ready latches
-  // for the session.
-  if (!ui::radarDisplayPreallocateFrameSprite()) {
-    Serial.printf("boot: frame sprite pre-alloc FAILED (free=%u largest=%u) "
-                  "— renders will flicker\n",
-                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-  }
   if (wifiShowsSetupScreenOnBoot()) {
     statusScreenPortal();
   }
@@ -181,19 +169,32 @@ void setup() {
   services::adsb::setPollFn(wifiLoop);
 
   if (wifiSetupConnect()) {
-    // Boot-time tile fetch, BEFORE showRadarIfConnected() allocates the
-    // 58 KB 8bpp sprite. Heap here is clean (~130 KB free, 60 KB+
-    // largest contiguous) — enough for the 52 KB mbedTLS + 27 KB tile
-    // buffer. Once the sprite is allocated, the largest contiguous block
-    // fragments to <10 KB during TLS handshake and the 27 KB tile alloc
-    // reliably fails. So we fetch the home tile now, persist to SPIFFS,
-    // and future boots hydrate from flash without ever hitting the wire.
+    // Boot-time tile fetch BEFORE the 58 KB 8bpp sprite is allocated.
+    // Order matters: sprite alloc takes a 58 KB contiguous chunk that
+    // fragments the heap enough to break the 32 KB mbedTLS record
+    // buffer + 32 KB tile buffer transient the fetch needs. Fetching
+    // first (with ~200+ KB free and largely un-fragmented) lets the
+    // tile land in SPIFFS + the RAM store.
     Serial.printf("boot: pre-sprite tile fetch (heap free=%u largest=%u)\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     if (services::tile_fetch::fetchHomeTileSync()) {
       Serial.println("boot: home tile ready");
     } else {
       Serial.println("boot: home tile fetch failed — will retry in main loop");
+    }
+    // NOW pre-alloc the frame sprite. Deferring past first render caused
+    // the "sequential per-element repaint" flicker — sprite alloc kept
+    // failing intermittently as heap fragmentation shifted around, and
+    // every failure dropped the render into the direct-panel fallback.
+    // Doing it here (post-fetch, pre-render) is the sweet spot: the tile
+    // buffer is already accounted for, and the sprite alloc doesn't have
+    // to compete with mbedTLS for a contiguous 32 KB chunk anymore.
+    Serial.printf("boot: pre-alloc sprite (heap free=%u largest=%u)\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    if (!ui::radarDisplayPreallocateFrameSprite()) {
+      Serial.printf("boot: frame sprite pre-alloc FAILED (free=%u largest=%u) "
+                    "— renders will flicker\n",
+                    ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     }
     showRadarIfConnected();
   }
