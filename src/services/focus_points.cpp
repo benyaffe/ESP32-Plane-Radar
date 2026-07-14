@@ -39,9 +39,13 @@ struct BakedAirport {
   double lon;
   uint8_t default_range_idx;
 };
+// ICAO 4-letter codes for consistency with anything picked from the LAN
+// portal's airport search (which always inserts ICAO). Chip UI auto-migrates
+// any 3-letter IATA it finds in a persisted ring to the matching ICAO on
+// load, so users upgrading from an older firmware don't end up with a mix.
 constexpr BakedAirport kFallbackAirports[] = {
-    {"SFO", 37.6188, -122.3750, 1},  // Class B
-    {"OAK", 37.7213, -122.2214, 1},  // Class C
+    {"KSFO", 37.6188, -122.3750, 2},  // Class B, 15 nm view
+    {"KOAK", 37.7213, -122.2214, 2},  // Class C, 15 nm view
 };
 constexpr size_t kFallbackCount =
     sizeof(kFallbackAirports) / sizeof(kFallbackAirports[0]);

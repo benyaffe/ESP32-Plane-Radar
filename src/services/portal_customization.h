@@ -14,45 +14,47 @@ extern const uint8_t _binary_data_airport_index_json_gz_end[] asm(
 
 namespace plane_radar::portal {
 
-// HTML/JS injected into every WiFiManager page via setCustomHeadElement().
+// HTML/JS/CSS injected into every WiFiManager page via setCustomHeadElement().
 //
-// On EVERY page: kills iOS's initial auto-capitalization on the Wi-Fi password
-//   and SSID fields.
-// On the LAN /param page: groups WiFiManager's flat list of fields into named
-//   sections with hint text, adds address+airport search boxes wired to a
-//   local airport index + the Netlify geocode proxy, replaces the focus-list
-//   raw-JSON field with an editable chip list, and auto-populates empty home
-//   coords via a public IP-geolocation call on first load.
-// On the captive-portal /param page (we deliberately don't attach any params
-//   there), the enhancement is a no-op past the caps fix.
+// On EVERY page:
+//   - kill iOS's initial auto-capitalization on password / SSID fields
+//   - restyle the h1 with a "Plane Radar" / "Plane Radar Setup" title
+//   - if we land on the WiFiManager "Saved" page, flash a success banner and
+//     redirect back to /param instead of leaving the user on a dead-end
+//
+// On the LAN /param page only:
+//   - address+airport search box (Netlify geocode proxy + local airport index)
+//   - focus-places chip editor: one column, editable name, editable range,
+//     full-address subtitle for freshly-added address picks; auto-migrates
+//     any 3-letter IATA in the persisted ring to the matching 4-letter ICAO
+//   - auto-populate empty home coords via ipapi.co on first load
 constexpr char kCustomHead[] = R"HTML(<style>
-.pr-sec{margin:18px 0 6px}
-.pr-hdr{font-size:1.1em;font-weight:700;border-bottom:1px solid #ccc;padding-bottom:3px;margin-bottom:4px}
-.pr-hint{color:#666;font-size:.85em;margin-bottom:8px}
-.pr-search{position:relative}
-.pr-hits{display:none;position:absolute;left:0;right:0;top:100%;z-index:10;border:1px solid #ccc;border-top:none;max-height:220px;overflow:auto;font-size:.9em;background:#fff;border-radius:0 0 .3rem .3rem;box-shadow:0 3px 10px rgba(0,0,0,.1)}
+.pr-chips{display:flex;flex-direction:column;gap:6px;margin:4px 0}
+.pr-chip{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px;border:1px solid #ccc;border-radius:.3rem;padding:6px 8px;background:#f4f7fa}
+.pr-chip-row{display:flex;flex-direction:row;align-items:center;gap:6px;flex:1 1 auto;min-width:0}
+.pr-chip-name{flex:1 1 auto;min-width:0;border:0;background:transparent;font-weight:700;font-size:1em;padding:2px 4px;width:100%;box-sizing:border-box}
+.pr-chip-name:focus{outline:1px solid #1fa3ec;border-radius:2px;background:#fff}
+.pr-chip-range{width:5.2em;padding:2px 4px;font-size:.9em;margin:0}
+.pr-chip-rm{padding:2px 10px;background:#dc3630;color:#fff;border:0;border-radius:.3rem;cursor:pointer;font-size:1em;line-height:1;flex:0 0 auto}
+.pr-chip-sub{width:100%;color:#555;font-size:.8em;padding:0 4px;line-height:1.3;word-break:break-word}
+.pr-saved{background:#5cb85c;color:#fff;padding:12px;border-radius:.3rem;margin-bottom:12px;font-weight:700;text-align:center}
+.pr-hits{display:none;position:absolute;left:0;right:0;top:100%;z-index:10;border:1px solid #ccc;border-top:none;max-height:220px;overflow:auto;font-size:.9em;background:#fff;border-radius:0 0 .3rem .3rem;box-shadow:0 3px 10px rgba(0,0,0,.12)}
 .pr-hit{padding:8px 10px;cursor:pointer;border-bottom:1px solid #eee}
 .pr-hit:hover{background:#e8f4fe}
 .pr-hit:last-child{border-bottom:0}
-.pr-chip{border:1px solid #ccc;border-radius:.3rem;padding:4px 4px 4px 8px;display:inline-flex;align-items:center;gap:6px;background:#f4f7fa;margin:0 4px 4px 0}
-.pr-chip-name{border:0;background:transparent;font-weight:700;font-size:1em;width:5em;padding:2px 0}
-.pr-chip-name:focus{outline:1px solid #1fa3ec;border-radius:2px}
-.pr-chip-range{width:4.6em;padding:2px 4px;font-size:.9em;margin:0}
-.pr-chip-rm{padding:2px 8px;background:#dc3630;color:#fff;border:0;border-radius:.3rem;cursor:pointer;font-size:1em;line-height:1}
+.pr-search{position:relative;margin:4px 0}
+body.invert .pr-chip{background:#282828;border-color:#555}
+body.invert .pr-chip-sub{color:#aaa}
 body.invert .pr-hits{background:#282828;border-color:#555}
 body.invert .pr-hit{border-bottom-color:#444}
 body.invert .pr-hit:hover{background:#3a3a3a}
-body.invert .pr-chip{background:#282828;border-color:#555}
-body.invert .pr-hdr{border-bottom-color:#555}
-body.invert .pr-hint{color:#aaa}
 </style><script>
 (function(){
 "use strict";
 function esc(s){return String(s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function deb(fn,ms){var t;return function(){var a=arguments,c=this;clearTimeout(t);t=setTimeout(function(){fn.apply(c,a);},ms);};}
-function el(tag,attrs,inner){var e=document.createElement(tag);if(attrs)for(var k in attrs)e.setAttribute(k,attrs[k]);if(inner!=null)e.innerHTML=inner;return e;}
 
-// Kill iOS's initial auto-caps on password and SSID fields.
+// Kill iOS's initial auto-caps on password + SSID inputs on every page.
 function fixCaps(){
   document.querySelectorAll('input[type=password], input[name=s], input[name=ssid]').forEach(function(x){
     x.setAttribute("autocapitalize","off");
@@ -62,14 +64,13 @@ function fixCaps(){
 }
 
 // Cached lazy fetch of the trimmed airport index served from device flash.
+// Row shape: [icao, iata, city, lat, lon].
 var apIdxP=null;
 function apIdx(){
   if(apIdxP) return apIdxP;
   apIdxP=fetch("/data/airport_index.json").then(function(r){return r.ok?r.json():[];}).catch(function(){return[];});
   return apIdxP;
 }
-// Row shape: [icao, iata, city, lat, lon]. Airport picks always carry the
-// ICAO as the chip name — consistent 4-letter identifier worldwide.
 function apSearch(idx,q){
   q=q.toLowerCase();var out=[];
   for(var i=0;i<idx.length&&out.length<8;i++){
@@ -78,24 +79,21 @@ function apSearch(idx,q){
     if(hit) out.push({
       label:(r[1]?r[1]+" · ":"")+r[0]+" — "+r[2],
       lat:r[3],lon:r[4],
-      chipName:r[0],                     // ICAO — canonical airport ID
-      fullText:r[0]+" — "+r[2]           // shown in search box after pick
+      chipName:r[0],     // ICAO — canonical 4-letter airport id
+      subtitle:""
     });
   }
   return out;
 }
 
-// Address geocoding via the Netlify proxy. Show the whole display_name in the
-// search box (users typed an address — they want to see the address); derive a
-// short chip name from a middle segment (skip the street number; pick the
-// most human-readable label available).
+// Derive a short (<=15 char) chip name from a Nominatim display_name. Prefer
+// a street/place segment over a leading house number.
 function addrShortName(displayName){
   var parts=displayName.split(",").map(function(s){return s.trim();}).filter(Boolean);
   if(!parts.length) return "Place";
-  // Skip a pure-number first segment (house number) — pick the next thing.
   var i=(/^\d+$/.test(parts[0]))?1:0;
   var pick=parts[i]||parts[0];
-  return pick.length>16?pick.slice(0,16):pick;
+  return pick.length>15?pick.slice(0,15):pick;
 }
 function addrSearch(q,sig){
   return fetch("https://radar.benyaffe.com/api/geocode?q="+encodeURIComponent(q),{signal:sig})
@@ -104,7 +102,7 @@ function addrSearch(q,sig){
       label:"📍 "+x.display_name,
       lat:x.lat,lon:x.lon,
       chipName:addrShortName(x.display_name),
-      fullText:x.display_name
+      subtitle:x.display_name    // shown in the chip subtitle for context
     };});})
     .catch(function(){return[];});
 }
@@ -117,39 +115,13 @@ function search(q){
   ]).then(function(rs){return rs[0].concat(rs[1]);});
 }
 
-// --- section helpers ---
-function makeSection(title,hint){
-  var wrap=el("div",{"class":"pr-sec"});
-  wrap.appendChild(el("div",{"class":"pr-hdr"},esc(title)));
-  if(hint) wrap.appendChild(el("div",{"class":"pr-hint"},esc(hint)));
-  return wrap;
-}
 function makeSearchBox(placeholder){
-  var box=el("div",{"class":"pr-search"});
+  var box=document.createElement("div");
+  box.className="pr-search";
   box.innerHTML=
-    '<input type="text" placeholder="'+esc(placeholder)+'" autocapitalize="off" autocorrect="off" spellcheck="false">'+
+    '<input type="text" placeholder="'+esc(placeholder)+'" style="width:100%;padding:5px;font-size:1em" autocapitalize="off" autocorrect="off" spellcheck="false">'+
     '<div class="pr-hits"></div>';
   return box;
-}
-// Walk back past <br>s to find the <label for=id> WiFiManager emits before
-// text-input fields (label-BEFORE pattern). Rejects labels belonging to a
-// different field — checkboxes use label-AFTER, so their `previous` chain
-// leads to the prior field's label, which is not what we want.
-function labelFor(input){
-  var e=input.previousElementSibling;
-  while(e && e.tagName==="BR") e=e.previousElementSibling;
-  if(e && e.tagName==="LABEL" && e.getAttribute("for")===input.id) return e;
-  return null;
-}
-// The anchor before which we insert section stuff:
-//   - label-BEFORE fields  → the label (header lands above the label)
-//   - label-AFTER / bare   → the input's own preceding <br>, else the input
-function anchorFor(input){
-  var lbl=labelFor(input);
-  if(lbl) return lbl;
-  var prev=input.previousElementSibling;
-  if(prev && prev.tagName==="BR") return prev;
-  return input;
 }
 function renderHits(hits,results,pick){
   if(!results.length){hits.style.display="none";hits.innerHTML="";return;}
@@ -159,21 +131,18 @@ function renderHits(hits,results,pick){
     x.addEventListener("click",function(){pick(results[+x.getAttribute("data-i")]);});
   });
 }
-
-// Insert a section header + search box above the coord pair.
-function decorateCoordPair(latEl,lonEl,title,hint){
-  var anchor=anchorFor(latEl);
-  var sec=makeSection(title,hint);
+function attachCoordSearch(latEl,lonEl){
   var box=makeSearchBox("Search address or airport (e.g. SFO, Golden Gate Bridge)");
-  sec.appendChild(box);
-  anchor.parentNode.insertBefore(sec,anchor);
+  var anchor=latEl.previousElementSibling;
+  var host=(anchor&&anchor.tagName==="LABEL")?anchor:latEl;
+  host.parentNode.insertBefore(box,host);
   var input=box.querySelector("input"),hits=box.querySelector(".pr-hits");
   var run=deb(function(){
     search(input.value.trim()).then(function(rs){
       renderHits(hits,rs,function(r){
         latEl.value=Number(r.lat).toFixed(6);
         lonEl.value=Number(r.lon).toFixed(6);
-        input.value=r.fullText;
+        input.value=r.subtitle||r.chipName;
         hits.style.display="none";
         latEl.dispatchEvent(new Event("input"));
         lonEl.dispatchEvent(new Event("input"));
@@ -181,46 +150,82 @@ function decorateCoordPair(latEl,lonEl,title,hint){
     });
   },300);
   input.addEventListener("input",run);
-  document.addEventListener("click",function(e){if(!sec.contains(e.target)) hits.style.display="none";});
+  document.addEventListener("click",function(e){if(!box.contains(e.target)) hits.style.display="none";});
 }
 
-// Focus places editor: chip list + add-search. Serializes back to the hidden
-// WiFiManager textarea on every change. Chip name is user-editable inline —
-// airports get ICAO by default, addresses get a short human name.
-function decorateFocusEditor(field){
-  var anchor=anchorFor(field);
-  var sec=makeSection("Focus places","Extra spots the radar cycles through with a double-tap.");
-  var chips=el("div",null,"");chips.style.marginBottom="6px";
-  sec.appendChild(chips);
-  var box=makeSearchBox("Add airport or address (e.g. PAO, Golden Gate Bridge)");
-  sec.appendChild(box);
-  anchor.parentNode.insertBefore(sec,anchor);
-  // Hide the raw JSON field + its label — chips are the source of truth from
-  // the user's perspective; the field is a hidden save-handler pipe.
-  if(anchor.tagName==="LABEL") anchor.style.display="none";
+// One-column chip editor for the focus_ring field. Each chip is a full-width
+// row with an editable name, a range dropdown, and a remove button. Freshly
+// picked addresses get a subtitle line under the name with the full text so
+// the user can see what they picked.
+//
+// Auto-migration: any 3-letter IATA name found on load is transparently
+// upgraded to its 4-letter ICAO by consulting the airport index. Runs once
+// on load; the migrated ring is serialized so the next save persists it.
+function attachFocusEditor(field){
+  var wrap=document.createElement("div");
+  wrap.style.margin="4px 0";
+  wrap.innerHTML=
+    '<div class="pr-chips"></div>'+
+    '<div class="pr-search" style="margin-top:6px">'+
+      '<input type="text" placeholder="Add airport or address (e.g. PAO, Golden Gate Bridge)" style="width:100%;padding:5px;font-size:1em" autocapitalize="off" autocorrect="off" spellcheck="false">'+
+      '<div class="pr-hits"></div>'+
+    '</div>';
+  field.parentNode.insertBefore(wrap,field);
   field.style.display="none";
+  var lbl=field.previousElementSibling;
+  if(lbl&&lbl.tagName==="LABEL") lbl.style.display="none";
 
+  var chips=wrap.querySelector(".pr-chips"),input=wrap.querySelector("input"),hits=wrap.querySelector(".pr-hits");
   var rng=[5,10,15,25]; // matches kRangePresets in include/ui/radar_range.h
   var arr=[];
   try{arr=JSON.parse(field.value||"[]");if(!Array.isArray(arr))arr=[];}catch(e){arr=[];}
 
+  // subtitle is chip-instance-only (this-session); never serialized
+  arr.forEach(function(e){e._sub=e._sub||"";});
+
   function ser(){
     field.value=JSON.stringify(arr.map(function(e){return{
-      name:String(e.name||"").slice(0,16),
+      name:String(e.name||"").slice(0,15),
       lat:+Number(e.lat).toFixed(6),
       lon:+Number(e.lon).toFixed(6),
       range_idx:e.range_idx|0
     };}));
   }
+
+  // Upgrade any 3-letter IATA chip name to its ICAO counterpart. Fire-and-
+  // forget; renders whatever arr has right now, then re-renders when the
+  // index resolves and any migration completes.
+  function migrateIata(){
+    var hasIata=arr.some(function(e){return typeof e.name==="string"&&e.name.length===3;});
+    if(!hasIata) return;
+    apIdx().then(function(idx){
+      var byIata={};
+      idx.forEach(function(r){if(r[1]) byIata[r[1].toUpperCase()]=r[0];});
+      var changed=false;
+      arr.forEach(function(e){
+        if(typeof e.name==="string" && e.name.length===3){
+          var up=byIata[e.name.toUpperCase()];
+          if(up){e.name=up;changed=true;}
+        }
+      });
+      if(changed){draw();ser();}
+    });
+  }
+
   function draw(){
     chips.innerHTML="";
     arr.forEach(function(e,i){
-      var chip=el("span",{"class":"pr-chip","data-i":i});
-      var opts=rng.map(function(nm,ri){return '<option value="'+ri+'"'+(ri===(e.range_idx|0)?" selected":"")+">"+nm+"nm</option>";}).join("");
+      var chip=document.createElement("span");
+      chip.className="pr-chip";
+      chip.setAttribute("data-i",i);
+      var opts=rng.map(function(nm,ri){return '<option value="'+ri+'"'+(ri===(e.range_idx|0)?" selected":"")+">"+nm+" nm</option>";}).join("");
       chip.innerHTML=
-        '<input class="pr-chip-name" value="'+esc(e.name)+'" maxlength="16" autocapitalize="off" autocorrect="off" spellcheck="false">'+
-        '<select class="pr-chip-range">'+opts+'</select>'+
-        '<button type="button" class="pr-chip-rm" title="Remove">×</button>';
+        '<div class="pr-chip-row">'+
+          '<input class="pr-chip-name" value="'+esc(e.name)+'" maxlength="15" autocapitalize="off" autocorrect="off" spellcheck="false">'+
+          '<select class="pr-chip-range">'+opts+'</select>'+
+          '<button type="button" class="pr-chip-rm" title="Remove">×</button>'+
+        '</div>'+
+        (e._sub?'<div class="pr-chip-sub">'+esc(e._sub)+'</div>':'');
       chip.querySelector(".pr-chip-name").addEventListener("input",function(ev){
         arr[i].name=ev.target.value;ser();
       });
@@ -233,36 +238,28 @@ function decorateFocusEditor(field){
       chips.appendChild(chip);
     });
   }
-  draw();ser();
+  draw();ser();migrateIata();
 
-  var input=box.querySelector("input"),hits=box.querySelector(".pr-hits");
   var run=deb(function(){
     search(input.value.trim()).then(function(rs){
       renderHits(hits,rs,function(r){
         arr.push({
-          name:r.chipName,
+          name:String(r.chipName).slice(0,15),
           lat:+Number(r.lat).toFixed(6),
           lon:+Number(r.lon).toFixed(6),
-          range_idx:1
+          range_idx:1,
+          _sub:r.subtitle||""
         });
         input.value="";hits.style.display="none";draw();ser();
       });
     });
   },300);
   input.addEventListener("input",run);
-  document.addEventListener("click",function(e){if(!sec.contains(e.target)) hits.style.display="none";});
-}
-
-// Insert a header before a label-anchored element. Used to bracket sections
-// that already have working WiFiManager fields (weather reach, layers, device).
-function insertHeaderBefore(anchor,title,hint){
-  if(!anchor) return;
-  var sec=makeSection(title,hint);
-  anchor.parentNode.insertBefore(sec,anchor);
+  document.addEventListener("click",function(e){if(!wrap.contains(e.target)) hits.style.display="none";});
 }
 
 // Auto-populate empty home coords via public IP geolocation. Best-effort;
-// silent on failure. Runs once at page load, only if coords look unset.
+// silent on failure. Only runs if the coords look unset.
 function autoLocate(latEl,lonEl){
   if(!latEl||!lonEl) return;
   var la=parseFloat(latEl.value),lo=parseFloat(lonEl.value);
@@ -274,29 +271,61 @@ function autoLocate(latEl,lonEl){
   }).catch(function(){});
 }
 
+// If we've landed on the WiFiManager "Saved" page after a /param submit,
+// show a friendly banner and bounce back to /param instead of leaving the
+// user staring at a dead-end page.
+function handleSavePage(){
+  var path=window.location.pathname;
+  if(path==="/paramsave"){
+    var wrap=document.querySelector(".wrap")||document.body;
+    wrap.innerHTML='<div class="pr-saved">Saved ✓</div><div style="text-align:center;color:#555">Returning to settings…</div>';
+    setTimeout(function(){window.location.href="/param?saved=1";},700);
+    return true;
+  }
+  return false;
+}
+// Show a "Saved ✓" banner at the top of /param when we came back from a save.
+function showSavedBanner(){
+  if(window.location.search.indexOf("saved=1")<0) return;
+  var wrap=document.querySelector(".wrap");
+  if(!wrap) return;
+  var b=document.createElement("div");
+  b.className="pr-saved";
+  b.textContent="Saved ✓";
+  wrap.insertBefore(b,wrap.firstChild);
+  setTimeout(function(){
+    b.style.transition="opacity .5s";
+    b.style.opacity="0";
+    setTimeout(function(){if(b.parentNode) b.parentNode.removeChild(b);},600);
+  },2400);
+  // Strip the ?saved=1 from the URL so a reload doesn't repeat the banner.
+  if(history.replaceState) history.replaceState(null,"","/param");
+}
+
+// Replace the WiFiManager h1 (which just says "WiFiManager" out of the box)
+// with a project-specific title. Distinguishes "Setup" (captive AP at
+// 192.168.4.1) from the normal LAN portal so users know which mode they're
+// staring at.
+function updateBranding(){
+  var captive=/^192\.168\.4\.1/.test(window.location.host)||/plane-?radar[-.]setup/i.test(window.location.host);
+  document.title=captive?"Plane Radar — Setup":"Plane Radar";
+  var h1=document.querySelector("h1");
+  if(h1) h1.textContent=captive?"Plane Radar Setup":"Plane Radar";
+}
+
 function init(){
+  updateBranding();
   fixCaps();
+  if(handleSavePage()) return;
+  showSavedBanner();
   var lh=document.querySelector("input[name=radar_lat]");
   var oh=document.querySelector("input[name=radar_lon]");
   var lm=document.querySelector("input[name=metar_lat]");
   var om=document.querySelector("input[name=metar_lon]");
-  var rm=document.querySelector("input[name=metar_rad]");
   var fr=document.querySelector("textarea[name=focus_ring],input[name=focus_ring]");
-  var lyr1=document.querySelector("input[name=lyr_coast]");
-  var host=document.querySelector("input[name=ota_host]");
-
-  if(lh&&oh) decorateCoordPair(lh,oh,"Home","Where the radar is centered by default.");
-  if(lm&&om) decorateCoordPair(lm,om,"Weather map","Which airports show weather colors on the weather view.");
-  // Prepend a hint above the reach field, which has its own label already.
-  if(rm){
-    var reachAnchor=anchorFor(rm);
-    var hint=el("div",{"class":"pr-hint"},"How far the weather map reaches from that center.");
-    reachAnchor.parentNode.insertBefore(hint,reachAnchor);
-  }
-  if(fr) decorateFocusEditor(fr);
-  if(lyr1) insertHeaderBefore(anchorFor(lyr1),"Map layers","Turn each overlay on or off.");
-  if(host) insertHeaderBefore(anchorFor(host),"Device","Advanced. Change this if you have more than one radar on your network.");
-
+  if(lh&&oh) attachCoordSearch(lh,oh);
+  if(lm&&om) attachCoordSearch(lm,om);
+  if(fr) attachFocusEditor(fr);
   if(lh&&oh) autoLocate(lh,oh);
 }
 

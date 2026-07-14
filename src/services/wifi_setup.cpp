@@ -2,8 +2,6 @@
 
 #include "services/portal_customization.h"
 
-#include "ui/layer_style.h"
-
 #include <vector>
 
 #include <WiFi.h>
@@ -102,74 +100,37 @@ constexpr char kCoordInputAttrs[] =
     " type=\"number\" step=\"0.000001\"";
 constexpr char kRadiusInputAttrs[] =
     " type=\"number\" step=\"0.1\" min=\"1\"";
-// Portal labels are intentionally terse — the JS enhancement in
-// portal_customization.h wraps each pair in a section with its own header and
-// hint text, so the WiFiManager labels only need to identify the single field.
-WiFiManagerParameter s_param_lat("radar_lat", "Latitude", "0",
+constexpr char kFocusJsonAttrs[] =
+    " maxlength=\"640\" placeholder='[{\"name\":\"SFO\",\"lat\":37.62,\"lon\":-122.38,\"range_idx\":1}]'";
+
+WiFiManagerParameter s_param_lat("radar_lat", "Home latitude (deg)", "0",
                                 kCoordParamLen, kCoordInputAttrs);
-WiFiManagerParameter s_param_lon("radar_lon", "Longitude", "0",
+WiFiManagerParameter s_param_lon("radar_lon", "Home longitude (deg)", "0",
                                 kCoordParamLen, kCoordInputAttrs);
 
-WiFiManagerParameter s_param_metar_lat("metar_lat", "Latitude", "0",
+WiFiManagerParameter s_param_metar_lat("metar_lat",
+                                       "METAR map center latitude (deg)", "0",
                                        kCoordParamLen, kCoordInputAttrs);
-WiFiManagerParameter s_param_metar_lon("metar_lon", "Longitude", "0",
+WiFiManagerParameter s_param_metar_lon("metar_lon",
+                                       "METAR map center longitude (deg)", "0",
                                        kCoordParamLen, kCoordInputAttrs);
-WiFiManagerParameter s_param_metar_radius("metar_rad", "Reach (nm)", "45",
+WiFiManagerParameter s_param_metar_radius("metar_rad",
+                                          "METAR map radius (nm)", "45",
                                           kRadiusParamLen, kRadiusInputAttrs);
 
-// Hidden by the JS chip editor; only surfaces if scripting fails. Value is
-// still a JSON array (the shape the save handler expects) — the chip UI
-// serializes back to this field on every change.
-WiFiManagerParameter s_param_focus_json("focus_ring", "Focus places", "",
-                                        kFocusJsonParamLen);
+WiFiManagerParameter s_param_focus_json(
+    "focus_ring",
+    "Focus airports (JSON: [{name,lat,lon,range_idx}, ...])", "",
+    kFocusJsonParamLen, kFocusJsonAttrs);
 
 constexpr int kHostnameParamLen = 32;
 WiFiManagerParameter s_param_hostname(
-    "ota_host", "Local network name (advanced)",
+    "ota_host", "mDNS hostname (OTA + web portal)",
     config::kPortalHostname, kHostnameParamLen);
 
-// Layer visibility toggles — one checkbox per drawable overlay. Match the
-// `enum class Layer` order in include/ui/layer_style.h so the save handler
-// can route each param to its Layer with a simple parallel array.
-char s_layer_coastline_attrs[32] = "type=\"checkbox\"";
-char s_layer_land_attrs[32] = "type=\"checkbox\"";
-char s_layer_runways_large_attrs[32] = "type=\"checkbox\"";
-char s_layer_runways_focus_attrs[32] = "type=\"checkbox\"";
-char s_layer_aircraft_tags_attrs[32] = "type=\"checkbox\"";
-
-WiFiManagerParameter s_param_layer_coastline("lyr_coast", "Coastline", "T", 2,
-                                             s_layer_coastline_attrs,
-                                             WFM_LABEL_AFTER);
-WiFiManagerParameter s_param_layer_land("lyr_land", "Land shading", "T", 2,
-                                        s_layer_land_attrs, WFM_LABEL_AFTER);
-WiFiManagerParameter s_param_layer_runways_large("lyr_rwlg",
-                                                 "Airport runways", "T", 2,
-                                                 s_layer_runways_large_attrs,
-                                                 WFM_LABEL_AFTER);
-WiFiManagerParameter s_param_layer_runways_focus(
-    "lyr_rwfc", "Focus airport runways", "T", 2,
-    s_layer_runways_focus_attrs, WFM_LABEL_AFTER);
-WiFiManagerParameter s_param_layer_aircraft_tags(
-    "lyr_tags", "Plane info tags (callsign + altitude)", "T", 2,
-    s_layer_aircraft_tags_attrs, WFM_LABEL_AFTER);
-
-struct LayerParamBinding {
-  WiFiManagerParameter* param;
-  char* attrs;
-  ui::layers::Layer layer;
-};
-LayerParamBinding s_layer_bindings[] = {
-    {&s_param_layer_coastline,      s_layer_coastline_attrs,
-     ui::layers::Layer::Coastline},
-    {&s_param_layer_land,           s_layer_land_attrs,
-     ui::layers::Layer::Land},
-    {&s_param_layer_runways_large,  s_layer_runways_large_attrs,
-     ui::layers::Layer::RunwaysLarge},
-    {&s_param_layer_runways_focus,  s_layer_runways_focus_attrs,
-     ui::layers::Layer::RunwaysFocus},
-    {&s_param_layer_aircraft_tags,  s_layer_aircraft_tags_attrs,
-     ui::layers::Layer::AircraftTags},
-};
+char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
+WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
+                                     s_runways_checkbox_attrs, WFM_LABEL_AFTER);
 
 void refreshPortalParamDefaults() {
   char lat_buf[kCoordParamLen + 1];
@@ -204,13 +165,9 @@ void refreshPortalParamDefaults() {
   }
   s_param_hostname.setValue(hostname.c_str(), kHostnameParamLen);
 
-  // Prefill each layer checkbox with the currently-persisted state so the
-  // portal renders reality, not "everything on" every time.
-  for (const auto& b : s_layer_bindings) {
-    snprintf(b.attrs, 32, "type=\"checkbox\"%s",
-             ui::layers::enabled(b.layer) ? " checked" : "");
-    b.param->setValue("T", 2);
-  }
+  snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs),
+           "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
+  s_param_runways.setValue("T", 2);
 }
 
 void onPortalParamsSaved() {
@@ -223,15 +180,7 @@ void onPortalParamsSaved() {
                                           s_param_metar_radius.getValue());
   services::focus::saveRingJson(s_param_focus_json.getValue());
   services::ota::setHostname(s_param_hostname.getValue());
-  // Route each layer checkbox to ui::layers::toggle() only when its state
-  // actually flipped — layer_style.cpp writes NVS on every toggle, so guard
-  // against unnecessary flash churn on unchanged saves.
-  for (const auto& b : s_layer_bindings) {
-    const bool want = ui::radar::portalCheckboxChecked(b.param->getValue());
-    if (want != ui::layers::enabled(b.layer)) {
-      ui::layers::toggle(b.layer);
-    }
-  }
+  ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 }
 
 // LAN-only params. The captive portal deliberately shows just Wi-Fi so the
@@ -247,15 +196,14 @@ void attachLanExtraParams(WiFiManager& wm) {
   wm.addParameter(&s_param_metar_lon);
   wm.addParameter(&s_param_metar_radius);
   wm.addParameter(&s_param_focus_json);
-  for (const auto& b : s_layer_bindings) {
-    wm.addParameter(b.param);
-  }
   wm.addParameter(&s_param_hostname);
+  wm.addParameter(&s_param_runways);
   wm.setSaveParamsCallback(onPortalParamsSaved);
-  // LAN menu: 'param' becomes visible because we now have params to show.
-  // 'update' stays available for OTA firmware upload.
-  static const char* lan_menu[] = {"wifi", "param", "info", "update", "exit"};
-  std::vector<const char*> menu(lan_menu, lan_menu + 5);
+  // LAN menu: 'param' becomes visible because we now have params to show;
+  // 'update' stays available for OTA firmware upload. 'exit' dropped — it
+  // only loaded a static "exit" page that didn't actually do anything useful.
+  static const char* lan_menu[] = {"wifi", "param", "info", "update"};
+  std::vector<const char*> menu(lan_menu, lan_menu + 4);
   wm.setMenu(menu);
   s_lan_extras_attached = true;
 }
@@ -390,10 +338,13 @@ void ensureWifiManager() {
   });
   // Captive-portal menu: no 'param' (no LAN params attached yet), but keep
   // 'update' so a bad OTA can be recovered via captive-portal firmware upload
-  // without needing a USB cable and esptool.
-  static const char* captive_menu[] = {"wifi", "info", "update", "exit"};
-  std::vector<const char*> menu(captive_menu, captive_menu + 4);
+  // without needing a USB cable and esptool. 'exit' dropped — it only loaded
+  // a static "exit" page that didn't actually do anything useful.
+  static const char* captive_menu[] = {"wifi", "info", "update"};
+  std::vector<const char*> menu(captive_menu, captive_menu + 3);
   s_wm.setMenu(menu);
+  // Replace the WiFiManager h1 with a project-specific title on every page.
+  s_wm.setTitle("Plane Radar");
   s_wm_configured = true;
 }
 
