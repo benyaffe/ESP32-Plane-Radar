@@ -97,7 +97,7 @@ void drawZulu(LGFX_Sprite& g, const std::tm& utc) {
   g.setTextSize(1);
   g.setTextDatum(textdatum_t::top_center);
   g.setTextColor(colTemp(), radar::kColorBackground);
-  g.drawString(buf, radar::kCenterX, 142);
+  g.drawString(buf, radar::kCenterX, 152);
   g.setTextDatum(textdatum_t::top_left);
 }
 
@@ -178,7 +178,7 @@ void drawReferencePosition(LGFX_Sprite& g) {
   g.setTextSize(1);
   g.setTextDatum(textdatum_t::top_center);
   g.setTextColor(colGray(), radar::kColorBackground);
-  g.drawString(buf, radar::kCenterX, 182);
+  g.drawString(buf, radar::kCenterX, 192);
   g.setTextDatum(textdatum_t::top_left);
 }
 
@@ -210,14 +210,14 @@ void drawSensorBlock(LGFX_Sprite& g) {
   } else {
     std::snprintf(oat_val, sizeof(oat_val), "--C --F");
   }
-  drawLabelValue(g, "OAT", oat_val, 155, colGray(), colTemp());
+  drawLabelValue(g, "OAT", oat_val, 165, colGray(), colTemp());
 
-  // OAT moved down 7 px to y=155 to make room for the Zulu line at 142
-  // and the reference-position line at 182. Web preview matches this
-  // layout — see web/src/cockpitView.ts drawSensorBlock. CABIN/RH stay
-  // below OAT when a BME280 is installed; the reference-position line
-  // is only drawn on cockpit's outer path, so it doesn't collide with
-  // an inserted CABIN/RH pair.
+  // OAT at y=165 makes room for the Zulu line at 152 and the reference-
+  // position line at 192. Web preview matches this layout — see
+  // web/src/cockpitView.ts drawSensorBlock. CABIN/RH stay below OAT when
+  // a BME280 is installed; the reference-position line is only drawn on
+  // cockpit's outer path, so it doesn't collide with an inserted CABIN/RH
+  // pair.
   if (env.valid) {
     char cabin_val[16];
     char rh_val[16];
@@ -226,8 +226,8 @@ void drawSensorBlock(LGFX_Sprite& g) {
                   std::round(cabin_c), std::round(env.tempF));
     std::snprintf(rh_val, sizeof(rh_val), "%.0f%%",
                   std::round(env.humidityPct));
-    drawLabelValue(g, "CABIN", cabin_val, 168, colGray(), colTemp());
-    drawLabelValue(g, "RH",    rh_val,    182, colGray(), colTemp());
+    drawLabelValue(g, "CABIN", cabin_val, 178, colGray(), colTemp());
+    drawLabelValue(g, "RH",    rh_val,    192, colGray(), colTemp());
   }
 }
 
@@ -296,7 +296,7 @@ void drawWindIndicator(LGFX_Sprite& g) {
 // CABIN/RH lines when a BME280 is installed.
 void drawBaroIndicator(LGFX_Sprite& g) {
   const services::outdoor_temp::Reading r = services::outdoor_temp::cached();
-  const int block_cy = 205;
+  const int block_cy = 215;
   const int half_w = 36;
   const int half_h = 8;
   const uint16_t c = colGreen();
@@ -356,7 +356,7 @@ void drawUnsyncedPlaceholder(LGFX_Sprite& g) {
   g.setTextDatum(textdatum_t::top_center);
   g.setTextSize(1);
   g.setTextColor(colAmber(), radar::kColorBackground);
-  g.drawString("SYNC", radar::kCenterX, 148);
+  g.drawString("SYNC", radar::kCenterX, 158);
   g.setTextDatum(textdatum_t::top_left);
 }
 

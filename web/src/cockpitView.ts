@@ -110,7 +110,7 @@ function drawZulu(ctx: CanvasRenderingContext2D, now: Date): void {
   ctx.font = "10px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillText(`${hh}:${mm} Z`, CENTER_X, 142);
+  ctx.fillText(`${hh}:${mm} Z`, CENTER_X, 152);
 }
 
 function drawUnsyncedPlaceholder(ctx: CanvasRenderingContext2D): void {
@@ -120,7 +120,7 @@ function drawUnsyncedPlaceholder(ctx: CanvasRenderingContext2D): void {
   ctx.textBaseline = "middle";
   ctx.fillText("--:--", CENTER_X, CENTER_Y);
   ctx.font = "10px system-ui, sans-serif";
-  ctx.fillText("SYNC", CENTER_X, 148);
+  ctx.fillText("SYNC", CENTER_X, 158);
 }
 
 function drawLabelValue(
@@ -198,7 +198,7 @@ function drawFreshness(ctx: CanvasRenderingContext2D): void {
 }
 
 function drawBaroIndicator(ctx: CanvasRenderingContext2D, wx: WxReading): void {
-  const blockCy = 205;
+  const blockCy = 215;
   const halfW = 36;
   const halfH = 8;
   ctx.strokeStyle = FRAME;
@@ -221,9 +221,9 @@ function formatTempCF(tempF: number, valid: boolean): string {
 }
 
 function drawSensorBlock(ctx: CanvasRenderingContext2D, wx: WxReading): void {
-  drawLabelValue(ctx, "OAT", formatTempCF(wx.tempF, wx.valid), 155, TEMP);
+  drawLabelValue(ctx, "OAT", formatTempCF(wx.tempF, wx.valid), 165, TEMP);
   // Web preview has no BME280 — CABIN/RH lines omitted, matching the
-  // firmware behavior when no sensor is attached. Slot at y=167-179
+  // firmware behavior when no sensor is attached. Slot at y=177-189
   // reserved for a future cabin/RH readout so the layout stays stable
   // when it lands.
 }
@@ -253,7 +253,7 @@ function drawReferencePosition(ctx: CanvasRenderingContext2D): void {
   ctx.font = "9px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillText(label, CENTER_X, 182);
+  ctx.fillText(label, CENTER_X, 192);
 }
 
 function applyBezelMask(ctx: CanvasRenderingContext2D): void {
