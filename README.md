@@ -14,12 +14,14 @@ Firmware for an **ESP32-C3 Super Mini** and a **1.28″ round GC9A01** display (
 >
 > - **SDL desktop emulator** — the full radar renders in a Mac window (`pio run -e native`), no ESP32 needed to iterate.
 > - **Web preview** — TypeScript port under [`web/`](web/), deployed to [radar.benyaffe.com](https://radar.benyaffe.com) via Netlify; try the interface in a browser without hardware.
-> - **Live weather view** — triple-tap for a VFR/MVFR/IFR/LIFR dot map of nearby airports (METAR from aviationweather.gov — global, any ICAO).
-> - **Focus cycling** — double-tap moves the radar center through a Bay Area preset ring (Sutro → SFO → OAK → SJC → HWD → SQL → PAO → HAF), each with its own default zoom.
-> - **Map overlays** — coastline, land tint, major highways, and large-airport runways baked into flash from Natural Earth + OurAirports.
+> - **Live weather view** — a VFR/MVFR/IFR/LIFR dot map of nearby airports (METAR from aviationweather.gov — global, any ICAO), reached via double-tap.
+> - **Cockpit view** — Garmin-style watch face: local + Zulu time, OAT, wind, altimeter setting (baro), and a magnetic bearing to the nearest instrument-approach airport. Anchored to home even when the radar view is centered on a focus airport.
+> - **Focus cycling** — double-tap advances a ring of screens: Home radar → each focus airport → Weather → Cockpit → wraps. Airports and default zoom per-focus editable via the LAN portal or the web app.
+> - **Map overlays** — coastline, land tint, lakes, and large-airport runways baked into flash from Natural Earth + OurAirports.
 > - **Aircraft data blocks** — 2-line tags with callsign + altitude in hundreds of feet, rank-limited by a per-range clarity budget so wide views stay readable.
 > - **Nautical miles** as the display unit (aviation convention).
-> - **Layer toggles** — every overlay individually flips on/off via `1`–`6` keys in the emulator or buttons on the web.
+> - **Layer toggles** — every overlay individually flips on/off via number keys in the emulator or checkboxes on the LAN portal / web app.
+> - **Optional case-tap input** via an ADXL345 accelerometer on a dedicated software-I²C bus (GPIO 2/5); optional cabin temp/humidity via a BME280 on the hardware I²C bus (GPIO 6/7). Each sub-board plugs onto its own row of C3 header pins — no daisy-chained SDA/SCL.
 >
 > Upstream README continues below, unmodified.
 >
@@ -30,14 +32,14 @@ Firmware for an **ESP32-C3 Super Mini** and a **1.28″ round GC9A01** display (
 1. **Wi‑Fi setup** (if needed) — captive portal on AP **`PlaneRadar-Setup`**
 2. **Radar** — live aircraft from [adsb.fi](https://opendata.adsb.fi/) on a sonar-style grid
 
-After Wi‑Fi is saved, the device reconnects automatically; the radar runs in the main loop with periodic ADS-B updates (~5 s).
+After Wi‑Fi is saved, the device reconnects automatically; the radar runs in the main loop with periodic ADS-B updates (~3 s).
 
 ## Controls
 
-The device is a **five-screen ring** cycled by tapping the case (or the BOOT button):
+Every screen belongs to a **ring** cycled with double-taps. Ring length depends on how many focus airports you've saved in the LAN portal (defaults: Home + KSFO + KOAK). Home always sits at slot 0, so every power-on lands on Home.
 
 ```text
-Radar @ Home → Radar @ Focus 2 → Radar @ Focus 3 → Weather → Cockpit → (wraps)
+Radar @ Home → Radar @ focus 1 → Radar @ focus 2 → … → Weather → Cockpit → (wraps)
 ```
 
 | Action | Effect |
@@ -46,7 +48,9 @@ Radar @ Home → Radar @ Focus 2 → Radar @ Focus 3 → Weather → Cockpit →
 | **Double tap** | Advance to the next screen in the ring |
 | **BOOT hold 3 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
 
-Tap events come from either the BOOT button (GPIO 9, active LOW) *or* an optional ADXL345 accelerometer on the shared I²C bus (SDA=GPIO 6, SCL=GPIO 7, address 0x53) — when wired, knocking the enclosure fires the same gestures. Silent-fail on missing hardware: with no ADXL345 present, the BOOT button remains the only input path.
+Tap events come from either the BOOT button (GPIO 9, active LOW) *or* an optional ADXL345 accelerometer on a **dedicated** software I²C bus (SDA=GPIO 2, SCL=GPIO 5, address 0x53). Knocking the enclosure fires the same gestures. Silent-fail on missing hardware: with no ADXL345 present, the BOOT button remains the only input path.
+
+**Focus airport cap:** up to 6 user-editable airports (7 total ring slots including Home). Enforced client-side in the LAN portal and web settings; the firmware truncates anything larger as a server-side safety net.
 
 ## Wi‑Fi setup portal
 
@@ -112,8 +116,15 @@ As range decreases (or aircraft approach), targets move inward; beyond-ring dots
 
 - Source: `https://opendata.adsb.fi/api/v3/`
 - Fetch radius: `ui::radar::fetchRadiusKm()` — scales with the active preset to roughly the screen edge (so rim dots have data)
-- Poll interval: `kAdsbFetchIntervalMs` (5 s) in `config.h`
+- Poll interval: `kAdsbFetchIntervalMs` (3 s) in `config.h`
 - Ground aircraft hidden by default (`kAdsbShowGroundAircraft`)
+
+## Known limitations
+
+- **Magnetic bearing accuracy is regional.** The cockpit view's "N.n nm X of KAIRPORT" reference-position line is reported in magnetic degrees (aviation convention). The declination model is a tilted-dipole approximation — good to ~2-5° in the Americas (where Earth's magnetic field is dominantly dipolar), but ~10-15° off over Europe / the North Atlantic (the "European magnetic anomaly"). The 8-point compass bin (N/NE/E/…) will be correct in most of North America and often correct elsewhere; a wrong-bin readout in Europe is a known model limitation, not a bug. If accuracy elsewhere becomes user-visible, replace `magneticDeclinationDeg` in `src/services/weather_geo.cpp` with a real WMM / IGRF implementation.
+- **Wind arrows use TRUE bearing** (from Open-Meteo) even though the reference-position line uses magnetic. Consistent with meteorological reports (METARs report wind in magnetic; TAFs and Open-Meteo report in true). If this matters for your use case, thread the same declination correction into `drawWindIndicator`.
+- **Tile pyramid regenerates monthly.** If you move home to a place we've never fetched a tile for, the device fetches over HTTPS on boot; if you move somewhere with unusual airport data that the last monthly tile bake missed, wait for the next `build-tiles.yml` cron or trigger it manually.
+- **Single hardware I²C.** ESP32-C3 has only one hardware I²C controller. The tap sensor's dedicated bus is bit-banged in software (SoftWire). Fine for its 1-2 byte/interrupt traffic, but not a great host for anything demanding.
 
 ## Configuration
 
@@ -177,20 +188,39 @@ src/
 | SCL (SCLK) | GPIO **4** |
 | BOOT (user) | GPIO **9** |
 
-### Optional ADXL345 accelerometer (knock-the-case input)
+### Optional sensors
 
-Shares the I²C bus with the optional BME280 sensor. Wire this if the BOOT button isn't easily reachable through your enclosure.
+Both sub-boards are optional and independent. Each lives on its own I²C bus so you can plug each breakout onto its own row of C3 header pins without daisy-chaining SDA/SCL — VCC/GND still need a small splitter you solder by hand. Missing sensors silent-fail; the device still works, the affected line just doesn't render.
 
-| ADXL345 | ESP32-C3 |
+**BME280 — cabin temperature + humidity + baro** (I²C, hardware bus, address 0x76 or 0x77)
+
+Feeds the CABIN/RH lines on the cockpit view. Address is auto-probed at both addresses.
+
+| BME280 | ESP32-C3 |
 | -------- | -------- |
 | VCC | 3V3 |
 | GND | GND |
 | SDA | GPIO **6** |
 | SCL | GPIO **7** |
+
+**ADXL345 — knock-the-case tap input** (I²C, dedicated software bus, address 0x53)
+
+Fires the same single/double-tap gestures as the BOOT button — useful if the button isn't reachable through your enclosure.
+
+| ADXL345 | ESP32-C3 |
+| -------- | -------- |
+| VCC | 3V3 |
+| GND | GND |
+| SDA | GPIO **2** |
+| SCL | GPIO **5** |
 | CS | tie to VCC (I²C mode) |
 | SDO | tie to GND (address 0x53) |
 
 INT1 pin left disconnected — the firmware polls the chip's INT_SOURCE register each loop tick (~100 Hz).
+
+**Pull-up resistors:** any commodity breakout board (Adafruit, generic AliExpress boards, etc.) ships with on-board 10 kΩ pull-ups on SDA/SCL — no external resistors needed. **Bare-chip modules** need a 4.7 kΩ or 10 kΩ pull-up from SDA/SCL to 3V3.
+
+**⚠ Strapping pin note:** GPIO 2 on ESP32-C3 must read HIGH at boot (selects the normal SPI-flash boot path). Any ADXL345 breakout satisfies this via its on-board pull-up. If you disconnect the sensor module, **also** disconnect the wire from GPIO 2 — don't leave a dangling wire on that pin, or the next boot may pick the wrong boot mode.
 
 ## Build
 
@@ -230,9 +260,12 @@ Put the board in download mode (hold **BOOT**, tap **RESET**), then flash with C
 ### CI and releases (GitHub Actions)
 
 | Workflow | When | Output |
-|----------|------|--------|
+| -------- | ---- | ------ |
+| [Tests](.github/workflows/tests.yml) | Push / PR to `main` | `pio test -e native_test` (Unity, ~142 cases) + `npm --prefix web test` (vitest, ~229 cases) |
 | [Build](.github/workflows/build.yml) | Push / PR to `main` | Artifact `plane-radar-supermini` (merged + split `.bin` files, ~90 days) |
-| [Release](.github/workflows/release.yml) | Git tag `v*` (e.g. `v1.0.0`) | GitHub Release asset `plane-radar-v1.0.0.bin` + `.sha256` |
+| [Deploy web](.github/workflows/deploy-web.yml) | Push to `main` touching `web/**` | Netlify deploy of the web preview at `radar.benyaffe.com` |
+| [Build tiles](.github/workflows/build-tiles.yml) | Monthly cron + manual dispatch | Rebakes `web/public/data/tiles/` from GSHHG + OurAirports, commits back to `main` |
+| [Release](.github/workflows/release.yml) | Git tag `v*` (e.g. `v1.0.0-rc.1`) | GitHub Release asset `plane-radar-<tag>.bin` + `.sha256` |
 
 To ship a version users can download:
 
