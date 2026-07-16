@@ -10,6 +10,7 @@
 #include "services/adsb_client.h"
 #include "services/focus_points.h"
 #include "services/metar_config.h"
+#include "services/night_mode.h"
 #include "services/ota_update.h"
 #include "services/outdoor_temp.h"
 #include "services/radar_location.h"
@@ -39,6 +40,7 @@ unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
 unsigned long g_last_non_radar_draw_ms = 0;
+bool g_night_sleeping = false;
 
 inline size_t ringLength() {
   // N radar slots (one per focus airport) + weather + cockpit.
@@ -120,10 +122,33 @@ void adjustCurrent() {
   // Cockpit — no-op.
 }
 
+// Home-local Unix epoch for the night-mode window comparison. Returns 0
+// when SNTP hasn't synced (pre-2024) — night_mode::shouldSleep() then
+// keeps the screen on rather than guess.
+std::time_t homeLocalEpochNow() {
+  const std::time_t now = std::time(nullptr);
+  if (now < 1704067200L) return 0;
+  const long offset = services::outdoor_temp::cached().utcOffsetSec;
+  return now + static_cast<std::time_t>(offset);
+}
+
+void renderCurrentScreen() {
+  if (onRadar())        showRadarIfConnected();
+  else if (onWeather()) { ui::weather::draw(); g_last_non_radar_draw_ms = millis(); }
+  else if (onCockpit()) { ui::cockpit::draw(); g_last_non_radar_draw_ms = millis(); }
+}
+
 void handleBootButton() {
   bootButtonPollLongPress();
   const BootTap ev = bootButtonConsumeEvent();
   if (ev == BootTap::None) return;
+  // Any tap during sleep window is a wake — extend the grace period, do
+  // NOT let the tap change screens or range. Feels natural: "tap the
+  // case, screen comes back on where I left it."
+  if (g_night_sleeping) {
+    services::night_mode::bumpWake(homeLocalEpochNow(), 60);
+    return;
+  }
   if (ev == BootTap::Single) adjustCurrent();
   else                        advanceRing();  // Double
 }
@@ -155,6 +180,7 @@ void setup() {
   services::location::init();
   services::tile_cache::mountSpiffs();
   services::metar_config::init();
+  services::night_mode::init();
   ui::radar::rangeInit();
   services::focus::init();
   // Boot the ring at whichever focus was persisted so returning users see
@@ -206,6 +232,29 @@ void loop() {
   services::tap_sensor::poll();
   handleBootButton();
   wifiLoop();
+
+  // Night mode gate — evaluated every tick so a sleep-window start or
+  // wake-grace expiry takes effect within the loop period. When
+  // sleeping we still run wifiLoop above (Wi-Fi/OTA/portal keep
+  // working) but skip the render/fetch block below.
+  {
+    const std::time_t local = homeLocalEpochNow();
+    const bool want_sleep = services::night_mode::shouldSleep(local);
+    if (want_sleep && !g_night_sleeping) {
+      g_night_sleeping = true;
+      displaySetPowered(false);
+      Serial.println("night: sleep");
+    } else if (!want_sleep && g_night_sleeping) {
+      g_night_sleeping = false;
+      displaySetPowered(true);
+      renderCurrentScreen();
+      Serial.println("night: wake");
+    }
+  }
+  if (g_night_sleeping) {
+    delay(50);  // idle bigger step — nothing on screen to keep fresh
+    return;
+  }
   // ArduinoOTA server disabled: on ESP32-C3 with no PSRAM the ~10 KB
   // resident UDP/TCP listener + mDNS record was significant heap pressure.
   // Firmware updates go through the WiFiManager /update endpoint (curl POST

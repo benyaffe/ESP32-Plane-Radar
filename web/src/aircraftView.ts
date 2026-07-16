@@ -54,6 +54,9 @@ function isOnGround(a: Aircraft): boolean {
 
 function clarityScore(a: Aircraft): number {
   if (isEmergency(a)) return 1e9;
+  // No callsign (TIS-B / MLAT / ADS-R without ID) — never wins a tag
+  // slot. Triangle still draws so the position is visible.
+  if (!a.callsign) return -Infinity;
   const alt = a.altFt ?? 0;
   return alt + a.gsKnots * 20 + Math.abs(a.vsFpm) / 5;
 }
@@ -407,6 +410,9 @@ export function drawAircraft(
   const budget = tagBudget();
   const ranked = [...placed].sort((p, q) => q.clarity - p.clarity);
   for (let i = 0; i < Math.min(budget, ranked.length); i++) {
+    // -Infinity marks tracks with no identity (no callsign, no reg) —
+    // they never earn a tag slot even when the budget has room.
+    if (!Number.isFinite(ranked[i].clarity)) break;
     ranked[i].tagged = true;
   }
 

@@ -23,6 +23,7 @@
 #include "services/adsb_client.h"
 #include "services/focus_points.h"
 #include "services/metar_config.h"
+#include "services/night_mode.h"
 #include "services/outdoor_temp.h"
 #include "services/radar_location.h"
 #include "services/wifi_setup.h"
@@ -206,6 +207,7 @@ void setup() {
   services::location::init();
   host::loadBootstrapTiles();  // must precede first radar draw
   services::metar_config::init();
+  services::night_mode::init();
   ui::radar::rangeInit();
   services::focus::init();
   // Load persisted config from emulator_config.json (if present) so
@@ -236,6 +238,7 @@ void setup() {
 void loop() {
   static unsigned long last_shot_ms = 0;
   static unsigned long last_adsb_ms = 0;
+  static bool s_night_sleeping = false;
   bootButtonPollLongPress();
   // Drain any config-server POST /save changes onto this thread before
   // we render, so a mid-frame HTTP write can't race the render code.
@@ -246,7 +249,43 @@ void loop() {
     else if (onWeather()) { ui::weather::refresh(); ui::weather::draw(); }
     else if (onCockpit()) { ui::cockpit::refresh(); ui::cockpit::draw(); }
   }
+  // Night-mode sleep gate — same logic as src/main.cpp. On the emulator
+  // we use real host time plus the same Open-Meteo offset the cockpit
+  // clock uses, so scheduled sleep windows work in the SDL window too.
+  {
+    const std::time_t now = std::time(nullptr);
+    const std::time_t local =
+        (now < 1704067200L) ? 0 :
+        (now + static_cast<std::time_t>(
+                   services::outdoor_temp::cached().utcOffsetSec));
+    const bool want_sleep = services::night_mode::shouldSleep(local);
+    if (want_sleep && !s_night_sleeping) {
+      s_night_sleeping = true;
+      displaySetPowered(false);
+      std::printf("night: sleep\n");
+    } else if (!want_sleep && s_night_sleeping) {
+      s_night_sleeping = false;
+      displaySetPowered(true);
+      if (onRadar())        ui::radarDisplayDraw();
+      else if (onWeather()) { ui::weather::refresh(); ui::weather::draw(); }
+      else if (onCockpit()) { ui::cockpit::refresh(); ui::cockpit::draw(); }
+      std::printf("night: wake\n");
+    }
+  }
+
   const BootTap ev = bootButtonConsumeEvent();
+  // Taps during the sleep window are wake-only — they extend the awake
+  // grace and do NOT advance the ring.
+  if (s_night_sleeping) {
+    const std::time_t now = std::time(nullptr);
+    const std::time_t local =
+        (now < 1704067200L) ? 0 :
+        (now + static_cast<std::time_t>(
+                   services::outdoor_temp::cached().utcOffsetSec));
+    if (ev != BootTap::None) services::night_mode::bumpWake(local, 60);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    return;
+  }
   if (ev == BootTap::Single)      adjustCurrent();
   else if (ev == BootTap::Double) advanceRing();
   if (consumeShotKey()) {

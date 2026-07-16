@@ -189,25 +189,31 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
     s_aircraft[n].nose_deg = pickNoseHeading(plane);
     s_aircraft[n].track_deg = pickTrackHeading(plane);
     s_aircraft[n].gs_knots = pickGroundSpeed(plane);
-    // Callsign: flight (dispatch) → registration / tail → hex transponder.
+    // Callsign: flight (dispatch) → registration / tail. Do NOT fall back
+    // to hex — synthetic ~-prefixed TIS-B / MLAT ids render as garbage.
+    // Mirrors src/services/adsb_client.cpp fillTagFields.
     copyStringTrimmed(plane, "flight", s_aircraft[n].callsign,
                       sizeof(s_aircraft[n].callsign));
     if (s_aircraft[n].callsign[0] == '\0') {
       copyStringTrimmed(plane, "r", s_aircraft[n].callsign,
                         sizeof(s_aircraft[n].callsign));
     }
-    if (s_aircraft[n].callsign[0] == '\0') {
-      copyStringTrimmed(plane, "hex", s_aircraft[n].callsign,
-                        sizeof(s_aircraft[n].callsign));
-    }
+    // Registration kept as a separate field for the ghost-dedup guard.
+    copyStringTrimmed(plane, "r", s_aircraft[n].reg,
+                      sizeof(s_aircraft[n].reg));
     copyStringTrimmed(plane, "t", s_aircraft[n].type,
                       sizeof(s_aircraft[n].type));
     s_aircraft[n].alt_ft = pickAltitudeFt(plane);
     s_aircraft[n].vs_fpm = pickVerticalRate(plane);
     s_aircraft[n].squawk = pickSquawk(plane);
+    // Data-source string ("adsb_icao", "mlat", …) drives ghost dedup.
+    const char* type_s =
+        plane["type"].is<const char*>() ? plane["type"].as<const char*>() : "";
+    s_aircraft[n].source = parseSource(type_s);
     ++n;
   }
   s_count = n;
+  deduplicateGhosts(s_aircraft, &s_count);
   s_last_update_ms = millis();
   ++s_fetch_count;
   std::printf("adsb: %zu aircraft in %.1f nm\n", n, nm);

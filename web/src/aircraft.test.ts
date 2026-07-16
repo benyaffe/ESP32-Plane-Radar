@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   aircraft,
   clearAircraft,
+  deduplicateGhosts,
   fetchAircraft,
   fetchCount,
   lastError,
 } from "./aircraft";
+import type { Aircraft } from "./aircraft";
 
 // These tests guard the fetch-supersede race that caused the "no
 // airplanes after home change" bug: two fetches for different centers
@@ -157,5 +159,107 @@ describe("URL construction", () => {
     expect(url).toContain("lat=16.9073");
     expect(url).toContain("lon=96.1332");
     expect(url).toContain("nm=11.0");
+  });
+});
+
+describe("deduplicateGhosts", () => {
+  function make(overrides: Partial<Aircraft>): Aircraft {
+    return {
+      hex: "AAA",
+      callsign: "",
+      reg: "",
+      type: "",
+      lat: 37.0,
+      lon: -122.0,
+      altFt: 10_000,
+      gsKnots: 250,
+      trackDeg: 90,
+      noseDeg: 90,
+      vsFpm: 0,
+      squawk: 1200,
+      sourceTier: 3,
+      ...overrides,
+    };
+  }
+
+  it("drops a no-identity TIS-B ghost co-located with an ADS-B track", () => {
+    const kept = make({ hex: "a704c0", callsign: "UAL1234", sourceTier: 3 });
+    const ghost = make({ hex: "~270c06", callsign: "", reg: "", sourceTier: 0,
+      lat: 37.001 });  // ~110 m north
+    const out = deduplicateGhosts([kept, ghost]);
+    expect(out).toHaveLength(1);
+    expect(out[0].callsign).toBe("UAL1234");
+  });
+
+  it("drops a matching-callsign MLAT track when co-located with an ADS-R twin", () => {
+    const ads_r = make({ hex: "ad138e", callsign: "N9412S", reg: "N9412S", sourceTier: 2 });
+    const mlat = make({ hex: "100000", callsign: "N9412S", reg: "", sourceTier: 1,
+      lat: 37.0002, lon: -122.0002 });
+    const out = deduplicateGhosts([ads_r, mlat]);
+    expect(out).toHaveLength(1);
+    expect(out[0].sourceTier).toBe(2);
+  });
+
+  it("keeps both when callsigns and registrations differ (approach queue)", () => {
+    const a = make({ callsign: "B08", reg: "N445XB", sourceTier: 2 });
+    const b = make({ callsign: "DAL449", reg: "N874DN", sourceTier: 3,
+      lat: 37.001, lon: -122.001 });
+    const out = deduplicateGhosts([a, b]);
+    expect(out).toHaveLength(2);
+  });
+
+  it("keeps same-tier neighbors even if they are essentially on top of each other", () => {
+    const a = make({ callsign: "FLT1", sourceTier: 3 });
+    const b = make({ callsign: "FLT2", sourceTier: 3,
+      lat: 37.0005, lon: -122.0005 });
+    const out = deduplicateGhosts([a, b]);
+    expect(out).toHaveLength(2);
+  });
+
+  it("keeps both when the pair is far apart even with matching identity", () => {
+    const a = make({ callsign: "N9412S", sourceTier: 3 });
+    const b = make({ callsign: "N9412S", sourceTier: 1, lat: 37.1 });  // ~11 km
+    const out = deduplicateGhosts([a, b]);
+    expect(out).toHaveLength(2);
+  });
+
+  it("normalizes the ~ prefix before comparing identities", () => {
+    const a = make({ callsign: "N9412S", sourceTier: 3 });
+    const b = make({ callsign: "~N9412S", sourceTier: 1,
+      lat: 37.0001, lon: -122.0001 });
+    const out = deduplicateGhosts([a, b]);
+    expect(out).toHaveLength(1);
+  });
+});
+
+describe("callsign fallback", () => {
+  async function fetchOne(raw: Record<string, unknown>): Promise<void> {
+    vi.stubGlobal("fetch", vi.fn(() =>
+      Promise.resolve(new Response(
+        JSON.stringify({ ac: [{ lat: 37.7, lon: -122.4, ...raw }] }),
+        { status: 200 },
+      )),
+    ));
+    await fetchAircraft(37.75, -122.45, 11);
+  }
+
+  it("prefers flight over registration and hex", async () => {
+    await fetchOne({ hex: "ABC123", flight: "UAL1234 ", r: "N12345" });
+    expect(aircraft()[0].callsign).toBe("UAL1234");
+  });
+
+  it("falls back to registration when flight is missing", async () => {
+    await fetchOne({ hex: "ABC123", r: "N12345" });
+    expect(aircraft()[0].callsign).toBe("N12345");
+  });
+
+  it("leaves callsign empty for hex-only tracks (TIS-B / MLAT ghosts)", async () => {
+    // The old behavior uppercased the hex and displayed it as a callsign.
+    // adsb.fi's ~-prefixed synthetic ids read as garbage on the device,
+    // so we now leave callsign empty and let the render layer suppress
+    // the tag entirely.
+    await fetchOne({ hex: "~2bb34b" });
+    expect(aircraft()[0].callsign).toBe("");
+    expect(aircraft()[0].hex).toBe("~2bb34b");  // hex still populated as identity key
   });
 });

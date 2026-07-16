@@ -23,6 +23,7 @@
 #include "config.h"
 #include "services/focus_points.h"
 #include "services/metar_config.h"
+#include "services/night_mode.h"
 #include "services/ota_update.h"
 #include "services/radar_location.h"
 #include "services/tap_sensor.h"
@@ -134,6 +135,16 @@ WiFiManagerParameter s_param_metar_lon("metar_lon", "Longitude", "0",
 WiFiManagerParameter s_param_metar_radius("metar_rad", "Reach (nm)", "45",
                                           kRadiusParamLen, kRadiusInputAttrs);
 
+// Night-mode schedule. Empty values disable — the field's `type="time"`
+// picker shows a small clear button. HH:MM in the device's local time
+// (home tz from Open-Meteo, same offset the cockpit clock uses).
+constexpr int kTimeParamLen = 8;   // "HH:MM" + slack
+constexpr char kTimeInputAttrs[] = " type=\"time\"";
+WiFiManagerParameter s_param_night_sleep("night_sleep", "Screen off at (HH:MM)",
+                                         "", kTimeParamLen, kTimeInputAttrs);
+WiFiManagerParameter s_param_night_wake("night_wake", "Screen on at (HH:MM)",
+                                        "", kTimeParamLen, kTimeInputAttrs);
+
 // Hidden by the JS chip editor on the LAN portal; only surfaces if scripting
 // fails. Value is still a JSON array (the shape the save handler expects) —
 // chips serialize back to this field on every change.
@@ -183,6 +194,15 @@ void refreshPortalParamDefaults() {
   s_param_metar_lon.setValue(metar_lon_buf, kCoordParamLen);
   s_param_metar_radius.setValue(metar_rad_buf, kRadiusParamLen);
 
+  char night_sleep_buf[kTimeParamLen + 1];
+  char night_wake_buf[kTimeParamLen + 1];
+  services::night_mode::formatHhmm(services::night_mode::sleepHhmm(),
+                                   night_sleep_buf, sizeof(night_sleep_buf));
+  services::night_mode::formatHhmm(services::night_mode::wakeHhmm(),
+                                   night_wake_buf, sizeof(night_wake_buf));
+  s_param_night_sleep.setValue(night_sleep_buf, kTimeParamLen);
+  s_param_night_wake.setValue(night_wake_buf, kTimeParamLen);
+
   const String ring_json = services::focus::currentRingJson();
   s_param_focus_json.setValue(ring_json.c_str(), kFocusJsonParamLen);
 
@@ -216,6 +236,9 @@ void onPortalParamsSaved() {
   services::metar_config::saveFromStrings(s_param_metar_lat.getValue(),
                                           s_param_metar_lon.getValue(),
                                           s_param_metar_radius.getValue());
+  services::night_mode::setSchedule(
+      services::night_mode::parseHhmm(s_param_night_sleep.getValue()),
+      services::night_mode::parseHhmm(s_param_night_wake.getValue()));
   services::focus::saveRingJson(s_param_focus_json.getValue());
   services::ota::setHostname(s_param_hostname.getValue());
   // Route each layer checkbox to ui::layers::toggle only when its state
@@ -252,6 +275,8 @@ void attachLanExtraParams(WiFiManager& wm) {
   wm.addParameter(&s_param_metar_lat);
   wm.addParameter(&s_param_metar_lon);
   wm.addParameter(&s_param_metar_radius);
+  wm.addParameter(&s_param_night_sleep);
+  wm.addParameter(&s_param_night_wake);
   wm.addParameter(&s_param_focus_json);
   // Layer checkboxes appear grouped in the JS section under "Map layers".
   wm.addParameter(&s_param_lyr_coast);

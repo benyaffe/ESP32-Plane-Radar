@@ -52,6 +52,7 @@ void ensureFilterBuilt() {
   ac0["r"] = true;
   ac0["hex"] = true;
   ac0["t"] = true;
+  ac0["type"] = true;  // adsb.fi data-source string (ghost dedup)
   ac0["alt_baro"] = true;
   ac0["alt_geom"] = true;
   ac0["baro_rate"] = true;
@@ -235,19 +236,28 @@ size_t populateFromArray(JsonArray ac) {
 
 void fillTagFields(Aircraft* ac, const JsonObject& plane) {
   // Callsign preference: flight (dispatch callsign, e.g. UAL1234) →
-  // registration / tail number (e.g. N12345) → hex ICAO transponder code
-  // as last resort. adsb.fi reports registration in "r".
+  // registration / tail number (e.g. N12345). If both are absent the
+  // callsign stays empty — the render layer will still draw the triangle
+  // but drop the tag. Do NOT fall back to the hex code: for TIS-B / MLAT
+  // / ADS-R tracks the "hex" is a synthetic ground-station id (often
+  // prefixed with ~), which reads as garbage on the display.
   copyJsonStringTrimmed(plane, "flight", ac->callsign, sizeof(ac->callsign));
   if (ac->callsign[0] == '\0') {
     copyJsonStringTrimmed(plane, "r", ac->callsign, sizeof(ac->callsign));
   }
-  if (ac->callsign[0] == '\0') {
-    copyJsonStringTrimmed(plane, "hex", ac->callsign, sizeof(ac->callsign));
-  }
+  // Registration (tail number) — kept separately so the ghost-dedup
+  // identity guard can match on it even when the callsign was set from
+  // the dispatch flight number.
+  copyJsonStringTrimmed(plane, "r", ac->reg, sizeof(ac->reg));
   copyJsonStringTrimmed(plane, "t", ac->type, sizeof(ac->type));
   ac->alt_ft = pickAltitudeFt(plane);
   ac->vs_fpm = pickVerticalRate(plane);
   ac->squawk = pickSquawk(plane);
+  // Data-source tier for ghost dedup. adsb.fi's "type" field carries
+  // the receiver-source string (adsb_icao, tisb_other, mlat, …).
+  const char* type_s =
+      plane["type"].is<const char*>() ? plane["type"].as<const char*>() : "";
+  ac->source = parseSource(type_s);
 }
 
 }  // namespace
@@ -324,6 +334,7 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
   }
 
   s_aircraft_count = populateFromArray(doc["ac"].as<JsonArray>());
+  deduplicateGhosts(s_aircraft, &s_aircraft_count);
   s_last_update_ms = millis();
   ++s_fetch_count;
   Serial.printf("adsb: %u aircraft\n", static_cast<unsigned>(s_aircraft_count));
@@ -339,6 +350,7 @@ bool ingestPayloadForTest(const char* body, unsigned long body_len) {
       DeserializationOption::Filter(s_filter));
   if (err) return false;
   s_aircraft_count = populateFromArray(doc["ac"].as<JsonArray>());
+  deduplicateGhosts(s_aircraft, &s_aircraft_count);
   ++s_fetch_count;
   return true;
 }

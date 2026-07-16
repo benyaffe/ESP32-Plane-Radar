@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 
 #include "config.h"
 #include "data/tile_store.h"
@@ -885,12 +886,21 @@ inline bool isEmergency(uint16_t squawk) {
 // Result is a coarse composite that reliably floats jets above pattern
 // GA at wide zooms without needing airport lookups or explicit filters.
 float clarityScore(const services::adsb::Aircraft& p) {
+  // Emergency squawks always float to the top of the tag budget — evaluate
+  // FIRST so a squawking emergency without a callsign still wins a slot.
+  if (isEmergency(p.squawk)) {
+    const float alt_e =
+        (p.alt_ft == INT32_MIN) ? 0.0f : static_cast<float>(p.alt_ft);
+    return alt_e + p.gs_knots * 20.0f + std::fabs(p.vs_fpm) / 5.0f + 1.0e9f;
+  }
+  // Non-emergency, no callsign (TIS-B / MLAT / ADS-R without ID) — never
+  // wins a tag slot. Triangle still draws so the position is visible.
+  if (p.callsign[0] == '\0') {
+    return -std::numeric_limits<float>::infinity();
+  }
   const float alt =
       (p.alt_ft == INT32_MIN) ? 0.0f : static_cast<float>(p.alt_ft);
-  float score = alt + p.gs_knots * 20.0f + std::fabs(p.vs_fpm) / 5.0f;
-  // Emergency squawks always float to the top of the tag budget.
-  if (isEmergency(p.squawk)) score += 1.0e9f;
-  return score;
+  return alt + p.gs_knots * 20.0f + std::fabs(p.vs_fpm) / 5.0f;
 }
 
 // Cap the number of full tags per frame, scaled to range preset. Wide views
@@ -1021,6 +1031,9 @@ void drawAircraft() {
   size_t scored_n = 0;
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
+    if (planes[i].callsign[0] == '\0' && !isEmergency(planes[i].squawk)) {
+      continue;  // no identity — triangle still draws, but no tag
+    }
     if (planes[i].callsign[0] == '\0' && planes[i].type[0] == '\0' &&
         planes[i].alt_ft == INT32_MIN) {
       continue;  // nothing to say about this one

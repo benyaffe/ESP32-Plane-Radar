@@ -14,6 +14,7 @@ function plane(overrides: Partial<Aircraft> = {}): Aircraft {
   return {
     hex: "AAA001",
     callsign: "UAL1234",
+    reg: "N12345",
     type: "B738",
     lat: 37.7,
     lon: -122.4,
@@ -23,6 +24,7 @@ function plane(overrides: Partial<Aircraft> = {}): Aircraft {
     noseDeg: 90,
     vsFpm: 0,
     squawk: 1200,
+    sourceTier: 3,
     ...overrides,
   };
 }
@@ -121,5 +123,28 @@ describe("drawAircraft — tags", () => {
       ctx.callsOf("fillText").map(c => c.args[0]).filter(t => typeof t === "string" && /^F\d+$/.test(t as string)),
     );
     expect(uniqueCallsigns.size).toBeLessThanOrEqual(20);
+  });
+
+  it("draws the triangle but no tag when callsign is empty", () => {
+    // TIS-B / MLAT ghosts arrive with an empty callsign after the
+    // pickCallsign fix. Icon still draws (aircraft position is real
+    // data), tag never wins a slot even with room in the budget.
+    const ctx = makeCanvasSpy();
+    drawAircraft(ctx, SF_VIEW(), [plane({ callsign: "" })], true, 1, Date.now());
+    expect(ctx.hasFill(COLORS.aircraft)).toBe(true);
+    // No callsign fillText call at all — the whole tag block skips.
+    const filledText = ctx.callsOf("fillText").map(c => String(c.args[0] ?? ""));
+    expect(filledText.every(t => t === "")).toBe(true);
+  });
+
+  it("still tags an emergency squawk with no callsign", () => {
+    // 7700 + no callsign = pathological but real (TIS-B track that
+    // happens to be squawking emergency). Must NOT get suppressed by
+    // the empty-callsign guard.
+    const ctx = makeCanvasSpy();
+    drawAircraft(ctx, SF_VIEW(),
+      [plane({ callsign: "", squawk: 7700 })], true, 1, Date.now());
+    expect(ctx.hasFill(COLORS.emergency)).toBe(true);
+    expect(ctx.hasText("EM")).toBe(true);
   });
 });
