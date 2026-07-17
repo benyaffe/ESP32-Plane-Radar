@@ -111,7 +111,7 @@ bool shouldSleep(std::time_t local_epoch) {
 
 void bumpWake(std::time_t local_epoch, int seconds) {
   if (local_epoch < kMinPlausibleEpoch) return;
-  if (seconds <= 0) seconds = 60;
+  if (seconds <= 0) seconds = 15;
   s_wake_until_epoch = local_epoch + seconds;
 }
 

@@ -146,6 +146,44 @@ void renderCurrentScreen() {
   else if (onCockpit()) { ui::cockpit::draw(); g_last_non_radar_draw_ms = millis(); }
 }
 
+// Build the "HH:MM – HH:MM" schedule label shown under the splash text.
+// Returns true if both endpoints are set; false → an empty label (never
+// happens in real use because we only call this when a sleep is
+// scheduled, but treat it safely).
+bool formatScheduleLine(char* out, size_t out_len) {
+  const int s = services::night_mode::sleepHhmm();
+  const int w = services::night_mode::wakeHhmm();
+  if (out == nullptr || out_len == 0) return false;
+  if (s < 0 || w < 0) { out[0] = '\0'; return false; }
+  char sbuf[8], wbuf[8];
+  services::night_mode::formatHhmm(s, sbuf, sizeof(sbuf));
+  services::night_mode::formatHhmm(w, wbuf, sizeof(wbuf));
+  std::snprintf(out, out_len, "%s to %s", sbuf, wbuf);
+  return true;
+}
+
+// Show the "Quiet hours — tap to wake" splash for `seconds` and poll
+// taps. Returns true if the user tapped (via the case sensor or BOOT).
+// Keeps wifiLoop turning over so the LAN portal doesn't hang while the
+// splash is up. Called on the scheduled sleep transition AND on boot
+// when the current time is already inside the sleep window.
+bool showNightNoticeAndPollTap(int seconds) {
+  char label[24];
+  formatScheduleLine(label, sizeof(label));
+  statusScreenNightNotice(label);
+
+  const unsigned long deadline = millis() + static_cast<unsigned long>(seconds) * 1000UL;
+  while (millis() < deadline) {
+    services::tap_sensor::poll();
+    bootButtonPollLongPress();
+    const BootTap ev = bootButtonConsumeEvent();
+    if (ev != BootTap::None) return true;
+    wifiLoop();  // keep OTA + captive portal responsive
+    delay(50);
+  }
+  return false;
+}
+
 void handleBootButton() {
   bootButtonPollLongPress();
   const BootTap ev = bootButtonConsumeEvent();
@@ -154,7 +192,7 @@ void handleBootButton() {
   // NOT let the tap change screens or range. Feels natural: "tap the
   // case, screen comes back on where I left it."
   if (g_night_sleeping) {
-    services::night_mode::bumpWake(homeLocalEpochNow(), 60);
+    services::night_mode::bumpWake(homeLocalEpochNow());  // default 15 s
     return;
   }
   if (ev == BootTap::Single) adjustCurrent();
@@ -232,6 +270,28 @@ void setup() {
     }
     showRadarIfConnected();
   }
+
+  // Booted (or power-cycled) inside the scheduled sleep window? Show
+  // the 5 s courtesy splash before darkening — same behavior as when
+  // the sleep window arrives during normal operation. A tap keeps the
+  // device awake (15 s grace) instead of sleeping. If SNTP hasn't
+  // synced or the tz offset is unknown, homeLocalEpochNow returns 0
+  // and shouldSleep returns false, so this block quietly does nothing.
+  {
+    const std::time_t local = homeLocalEpochNow();
+    if (services::night_mode::shouldSleep(local)) {
+      Serial.println("night: boot inside sleep window — splash");
+      if (showNightNoticeAndPollTap(5)) {
+        services::night_mode::bumpWake(homeLocalEpochNow());
+        renderCurrentScreen();
+        Serial.println("night: boot splash cancelled by tap");
+      } else {
+        g_night_sleeping = true;
+        displaySetPowered(false);
+        Serial.println("night: boot into sleep");
+      }
+    }
+  }
 }
 
 void loop() {
@@ -269,9 +329,19 @@ void loop() {
                     want_sleep ? 1 : 0, g_night_sleeping ? 1 : 0);
     }
     if (want_sleep && !g_night_sleeping) {
-      g_night_sleeping = true;
-      displaySetPowered(false);
-      Serial.println("night: sleep");
+      // 5 s courtesy splash before darkening — gives the user a chance
+      // to tap and stay up. A tap here is treated identically to any
+      // other tap-during-sleep: 15 s wake grace, then re-evaluate.
+      Serial.println("night: pre-sleep splash");
+      if (showNightNoticeAndPollTap(5)) {
+        services::night_mode::bumpWake(homeLocalEpochNow());
+        renderCurrentScreen();
+        Serial.println("night: splash cancelled by tap");
+      } else {
+        g_night_sleeping = true;
+        displaySetPowered(false);
+        Serial.println("night: sleep");
+      }
     } else if (!want_sleep && g_night_sleeping) {
       g_night_sleeping = false;
       displaySetPowered(true);

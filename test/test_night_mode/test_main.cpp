@@ -114,6 +114,17 @@ void test_bumpWake_reopens_screen_inside_the_window(void) {
   TEST_ASSERT_TRUE (nm::shouldSleep(t + 61));   // grace expired
 }
 
+void test_bumpWake_default_grace_is_15_seconds(void) {
+  // Deliberate short default: bumping without an explicit seconds arg
+  // wakes for exactly 15 s. Keeps accidental case-bumps from turning
+  // into an all-night light show.
+  nm::setSchedule(2200, 700);
+  const std::time_t t = at(22, 30);
+  nm::bumpWake(t);                                  // default seconds
+  TEST_ASSERT_FALSE(nm::shouldSleep(t + 14));
+  TEST_ASSERT_TRUE (nm::shouldSleep(t + 16));
+}
+
 void test_bumpWake_before_sync_is_ignored(void) {
   // No wake bump can happen before SNTP has locked — otherwise we'd
   // stash a fake wake_until_epoch that later becomes "the past" once
@@ -173,6 +184,7 @@ int main(int /*argc*/, char** /*argv*/) {
   RUN_TEST(test_empty_window_never_sleeps);
   RUN_TEST(test_pre_2024_epoch_never_sleeps);
   RUN_TEST(test_bumpWake_reopens_screen_inside_the_window);
+  RUN_TEST(test_bumpWake_default_grace_is_15_seconds);
   RUN_TEST(test_bumpWake_before_sync_is_ignored);
   RUN_TEST(test_setSchedule_clears_pending_wake_bump);
   RUN_TEST(test_parseHhmm_valid_shapes);

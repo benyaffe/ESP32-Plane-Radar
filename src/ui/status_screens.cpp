@@ -256,3 +256,37 @@ void statusScreenWifiReset() {
   drawTextBlock(config::kColorYellow, config::kTextOnYellow, lines,
                 sizeof(lines) / sizeof(lines[0]));
 }
+
+void statusScreenNightNotice(const char* schedule_line) {
+  // Warm dim amber on black — reads as "night light" rather than "wake
+  // up alarm". Roughly a third of full brightness on the amber channel
+  // keeps text legible in a dark room without lighting the wall.
+  constexpr uint16_t kDimAmber = 0x8200;   // r=16 g=16 b=0 in 5-6-5
+  constexpr uint16_t kFaintAmber = 0x4180; // r=8  g=12 b=0 — schedule row
+  tft.fillScreen(config::kColorBlack);
+  tft.setTextDatum(textdatum_t::middle_center);
+
+  displayFontSetBitmap(tft, &kGfxTitle);
+  const int title_h = tft.fontHeight();
+  displayFontSetBitmap(tft, &kGfxBody);
+  const int body_h = tft.fontHeight();
+  const bool has_schedule = schedule_line != nullptr && schedule_line[0] != '\0';
+  int total_h = title_h + kLineGap + body_h;
+  if (has_schedule) total_h += kLineGap + body_h;
+  int y = (config::kDisplayHeight - total_h) / 2;
+
+  displayFontSetBitmap(tft, &kGfxTitle);
+  tft.setTextColor(kDimAmber, config::kColorBlack);
+  tft.drawString("Quiet hours", kCenterX, y + title_h / 2);
+  y += title_h + kLineGap;
+
+  displayFontSetBitmap(tft, &kGfxBody);
+  tft.drawString("Tap to wake", kCenterX, y + body_h / 2);
+  y += body_h + kLineGap;
+
+  if (has_schedule) {
+    tft.setTextColor(kFaintAmber, config::kColorBlack);
+    tft.drawString(schedule_line, kCenterX, y + body_h / 2);
+  }
+  tft.display();
+}

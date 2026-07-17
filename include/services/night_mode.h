@@ -33,7 +33,10 @@ bool shouldSleep(std::time_t local_epoch);
 
 // Called from the main loop when the tap sensor latches an event and
 // we're in the sleep window: extends the awake window by `seconds`.
-void bumpWake(std::time_t local_epoch, int seconds = 60);
+// Default matches the "brief peek" use case — long enough to glance at
+// the current screen, short enough that an accidental case-bump doesn't
+// keep the display lit until the next scheduled wake.
+void bumpWake(std::time_t local_epoch, int seconds = 15);
 
 // Test hook — clears the wake-until bump and returns the module to its
 // disabled defaults. Not called from production code.

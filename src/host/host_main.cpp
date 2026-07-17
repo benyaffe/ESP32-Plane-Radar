@@ -262,6 +262,13 @@ void loop() {
   // Night-mode sleep gate — same logic as src/main.cpp. On the emulator
   // we use real host time plus the same Open-Meteo offset the cockpit
   // clock uses, so scheduled sleep windows work in the SDL window too.
+  //
+  // NOTE: emulator parity is intentionally simpler than the firmware —
+  // the 5 s pre-sleep splash + tap-cancel handshake lives only in
+  // src/main.cpp because the emulator's main event loop drives SDL
+  // through Panel_sdl::main and a blocking-loop splash here would
+  // stall SDL event processing. If you want to visually verify the
+  // splash, run the firmware build, not the emulator.
   {
     const std::time_t now = std::time(nullptr);
     const std::time_t local =
@@ -292,7 +299,7 @@ void loop() {
         (now < 1704067200L) ? 0 :
         (now + static_cast<std::time_t>(
                    services::outdoor_temp::cached().utcOffsetSec));
-    if (ev != BootTap::None) services::night_mode::bumpWake(local, 60);
+    if (ev != BootTap::None) services::night_mode::bumpWake(local);  // 15 s default
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     return;
   }
