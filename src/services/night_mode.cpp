@@ -80,6 +80,14 @@ void init() {
   prefs.end();
   if (validHhmm(sleep)) s_sleep_hhmm = sleep;
   if (validHhmm(wake))  s_wake_hhmm  = wake;
+  if ((s_sleep_hhmm == -1) != (s_wake_hhmm == -1)) {
+    // Half-filled state was persisted (user saved with only one field).
+    // shouldSleep() will still return false; log so we can diagnose
+    // "device never sleeps" reports.
+    Serial.printf("night_mode: half-filled schedule loaded "
+                  "(sleep=%d wake=%d) — night sleep will NOT activate\n",
+                  s_sleep_hhmm, s_wake_hhmm);
+  }
 #endif
 }
 

@@ -236,9 +236,19 @@ void onPortalParamsSaved() {
   services::metar_config::saveFromStrings(s_param_metar_lat.getValue(),
                                           s_param_metar_lon.getValue(),
                                           s_param_metar_radius.getValue());
-  services::night_mode::setSchedule(
-      services::night_mode::parseHhmm(s_param_night_sleep.getValue()),
-      services::night_mode::parseHhmm(s_param_night_wake.getValue()));
+  const int ns_sleep = services::night_mode::parseHhmm(
+      s_param_night_sleep.getValue());
+  const int ns_wake = services::night_mode::parseHhmm(
+      s_param_night_wake.getValue());
+  if ((ns_sleep == -1) != (ns_wake == -1)) {
+    // One field filled, the other blank — the schedule is stored but
+    // shouldSleep() will still return false. Log so the user can grep
+    // serial and see why the device isn't sleeping.
+    Serial.printf("night_mode: WARNING half-filled schedule "
+                  "(sleep=%d wake=%d) — both required to activate\n",
+                  ns_sleep, ns_wake);
+  }
+  services::night_mode::setSchedule(ns_sleep, ns_wake);
   services::focus::saveRingJson(s_param_focus_json.getValue());
   services::ota::setHostname(s_param_hostname.getValue());
   // Route each layer checkbox to ui::layers::toggle only when its state

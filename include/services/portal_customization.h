@@ -461,6 +461,7 @@ function init(){
   var om=document.querySelector("input[name=metar_lon]");
   var rm=document.querySelector("input[name=metar_rad]");
   var fr=document.querySelector("textarea[name=focus_ring],input[name=focus_ring]");
+  var ns=document.querySelector("input[name=night_sleep]");
   var lyr1=document.querySelector("input[name=lyr_coast]");
   var host=document.querySelector("input[name=ota_host]");
   if(lh&&oh) decorateCoordPair(lh,oh,"Home","Where the radar is centered by default.");
@@ -473,6 +474,7 @@ function init(){
     }
   }
   if(fr) decorateFocusEditor(fr);
+  if(ns) insertHeaderBefore(anchorFor(ns),"Quiet hours","Screen darkens between these times. Both times required — leave both blank to disable.");
   if(lyr1) insertHeaderBefore(anchorFor(lyr1),"Map layers","Turn each overlay on or off.");
   if(host) insertHeaderBefore(anchorFor(host),"Device","Advanced — change if you have more than one radar on your network.");
   if(lh&&oh) autoLocate(lh,oh);
