@@ -248,6 +248,26 @@ void loop() {
   {
     const std::time_t local = homeLocalEpochNow();
     const bool want_sleep = services::night_mode::shouldSleep(local);
+    static unsigned long s_last_night_log_ms = 0;
+    if (millis() - s_last_night_log_ms >= 30000UL) {
+      // Every 30 s: dump exactly what the sleep gate is seeing. If the
+      // schedule looks right but shouldSleep=0, the offset is the
+      // usual suspect (utc_offset_sec of 0 = clock still reads as UTC).
+      s_last_night_log_ms = millis();
+      const std::time_t utc = std::time(nullptr);
+      const long off = services::outdoor_temp::cached().utcOffsetSec;
+      std::tm tm = {};
+      if (local >= 1704067200L) {
+        std::tm* p = std::gmtime(&local);
+        if (p != nullptr) tm = *p;
+      }
+      Serial.printf("night: utc=%ld off=%ld local=%02d:%02d "
+                    "sched=[%d,%d] should=%d sleeping=%d\n",
+                    static_cast<long>(utc), off, tm.tm_hour, tm.tm_min,
+                    services::night_mode::sleepHhmm(),
+                    services::night_mode::wakeHhmm(),
+                    want_sleep ? 1 : 0, g_night_sleeping ? 1 : 0);
+    }
     if (want_sleep && !g_night_sleeping) {
       g_night_sleeping = true;
       displaySetPowered(false);

@@ -12,6 +12,7 @@
 #else
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #endif
@@ -101,7 +102,22 @@ bool ingestPayload(const char* body, size_t body_len) {
   // reverting the clock to UTC mid-display.
   if (doc["utc_offset_seconds"].is<long>() ||
       doc["utc_offset_seconds"].is<int>()) {
-    s_utc_offset_sec = doc["utc_offset_seconds"].as<long>();
+    const long fresh_offset = doc["utc_offset_seconds"].as<long>();
+    if (fresh_offset != s_utc_offset_sec) {
+      s_utc_offset_sec = fresh_offset;
+#if !defined(USE_NATIVE)
+      // Persist so night_mode / cockpit have a valid tz immediately on
+      // the next boot instead of running as UTC for the 5–30 s until
+      // the first fetch lands. If the user moves home, the offset is
+      // rewritten on the next successful fetch (loop() detects the
+      // home move and refetches without waiting for the 15-min TTL).
+      Preferences prefs;
+      if (prefs.begin("wxcache", false)) {
+        prefs.putLong("tz_offset", s_utc_offset_sec);
+        prefs.end();
+      }
+#endif
+    }
   }
   s_valid = true;
   s_last_fetch_ms = millis();
@@ -171,6 +187,16 @@ void init() {
   s_utc_offset_sec = 0;
   s_last_fetch_lat = 0.0;
   s_last_fetch_lon = 0.0;
+#if !defined(USE_NATIVE)
+  // Seed the offset from NVS if a previous boot fetched it. Guards
+  // night_mode / cockpit against reading UTC-based local time during
+  // the first few seconds after boot (before Open-Meteo fetches).
+  Preferences prefs;
+  if (prefs.begin("wxcache", true)) {
+    s_utc_offset_sec = prefs.getLong("tz_offset", 0);
+    prefs.end();
+  }
+#endif
 }
 
 void loop() {
