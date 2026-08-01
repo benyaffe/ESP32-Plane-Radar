@@ -111,6 +111,22 @@ def _parse_float(s: str | None) -> float | None:
         return None
 
 
+def _parse_coord(s: str | None, kind: str) -> float | None:
+    """Parse a coord and reject anything outside the valid geographic
+    range. OurAirports occasionally ships a row where a coord field is
+    off by a scale factor (e.g. LTAO in 2026-08 had le_longitude_deg =
+    3824610.0). deg_to_e7 on such a value overflows int32 and crashes
+    the encoder — swallow it here so one rotten row can't kill a
+    monthly bake."""
+    v = _parse_float(s)
+    if v is None:
+        return None
+    limit = 90.0 if kind == "lat" else 180.0
+    if v < -limit or v > limit:
+        return None
+    return v
+
+
 def _valid_icao(ident: str) -> bool:
     """OurAirports uses 4-letter ICAO identifiers for airports on the
     global ICAO grid. Airports without an ICAO grid entry get a longer
@@ -127,10 +143,10 @@ def _runways_by_airport(runways: Iterable[dict]) -> dict[str, list[tf.Runway]]:
         ident = (r.get("airport_ident") or "").strip()
         if not ident:
             continue
-        lat1 = _parse_float(r.get("le_latitude_deg"))
-        lon1 = _parse_float(r.get("le_longitude_deg"))
-        lat2 = _parse_float(r.get("he_latitude_deg"))
-        lon2 = _parse_float(r.get("he_longitude_deg"))
+        lat1 = _parse_coord(r.get("le_latitude_deg"), "lat")
+        lon1 = _parse_coord(r.get("le_longitude_deg"), "lon")
+        lat2 = _parse_coord(r.get("he_latitude_deg"), "lat")
+        lon2 = _parse_coord(r.get("he_longitude_deg"), "lon")
         if None in (lat1, lon1, lat2, lon2):
             continue
         out.setdefault(ident, []).append(
@@ -173,8 +189,8 @@ def build_airports(
         keep = tier >= 2 or (tier == 1 and (scheduled or has_iap))
         if not keep:
             continue
-        lat = _parse_float(a.get("latitude_deg"))
-        lon = _parse_float(a.get("longitude_deg"))
+        lat = _parse_coord(a.get("latitude_deg"), "lat")
+        lon = _parse_coord(a.get("longitude_deg"), "lon")
         if lat is None or lon is None:
             continue
         result.append(

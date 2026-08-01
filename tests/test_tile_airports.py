@@ -331,6 +331,27 @@ def test_missing_runway_coord_dropped():
     assert apts[0].runways == []
 
 
+def test_out_of_range_runway_coord_dropped():
+    """Regression: 2026-08 OurAirports had LTAO with le_longitude_deg =
+    3824610.0 (off by ~10^5). deg_to_e7 on that overflows int32 and
+    kills the whole encoder mid-bake. A single rotten source row must
+    not take down the monthly tile rebuild."""
+    apts = ta.build_airports(
+        [_apt(atype="large_airport", ident="KSFO")],
+        [_rwy(airport="KSFO", le_lon="3824610.0")],
+    )
+    assert apts[0].runways == []
+
+
+def test_out_of_range_airport_coord_dropped():
+    """Same defensive filter for airport self-coords — a bad lat/lon on
+    the airport row must not propagate into the tile encoder."""
+    apts = ta.build_airports(
+        [_apt(atype="large_airport", ident="KSFO", lat="9999")], []
+    )
+    assert apts == []
+
+
 # ---------------------------------------------------------------------------
 # Deterministic ordering
 # ---------------------------------------------------------------------------
