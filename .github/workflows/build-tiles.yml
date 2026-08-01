@@ -39,6 +39,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install tile-pipeline dependencies
+        # pyshp (shapefile parser) + shapely (GEOS clip) are required by
+        # scripts/gshhg_loader.py and scripts/tile_shapely.py. Same file
+        # tests.yml uses, so deps stay pinned in one place.
+        run: pip install -r requirements-dev.txt
+
       - name: Bake tiles
         run: |
           python scripts/build_tiles.py
