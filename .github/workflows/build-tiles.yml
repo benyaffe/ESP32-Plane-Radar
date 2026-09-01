@@ -45,6 +45,22 @@ jobs:
         # tests.yml uses, so deps stay pinned in one place.
         run: pip install -r requirements-dev.txt
 
+      - name: Cache GSHHG shoreline bundle
+        # The GSHHG zip is 150 MB, version-pinned in gshhg_loader.py, and
+        # served from a university mirror that intermittently times out
+        # (killed the 2026-09-01 run). Caching it means we only pay the
+        # download once — subsequent monthly bakes reuse the extracted
+        # shapefiles. Cache key hashes the loader so bumping the version
+        # (or any loader change) forces a fresh fetch.
+        uses: actions/cache@v4
+        with:
+          path: |
+            .local-data/gshhg-shp.zip
+            .local-data/gshhg
+          key: gshhg-${{ hashFiles('scripts/gshhg_loader.py') }}
+          restore-keys: |
+            gshhg-
+
       - name: Bake tiles
         run: |
           python scripts/build_tiles.py

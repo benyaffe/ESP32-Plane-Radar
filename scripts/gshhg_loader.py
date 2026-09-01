@@ -25,6 +25,8 @@ from __future__ import annotations
 import io
 import shutil
 import sys
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -55,10 +57,30 @@ def ensure_gshhg_extracted(cache_dir: Path) -> Path:
         return unpack
     zip_path = cache_dir / "gshhg-shp.zip"
     if not zip_path.exists():
-        print(f"downloading {GSHHG_URL} (~150 MB, one-time)", file=sys.stderr)
-        with urllib.request.urlopen(GSHHG_URL, timeout=600) as resp, \
-                open(zip_path, "wb") as out:
-            shutil.copyfileobj(resp, out)
+        # University mirror times out ~monthly. Retry with backoff so a
+        # single transient hiccup doesn't sink an entire bake run.
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            print(
+                f"downloading {GSHHG_URL} (~150 MB, one-time) "
+                f"[attempt {attempt}/{attempts}]",
+                file=sys.stderr,
+            )
+            try:
+                with urllib.request.urlopen(GSHHG_URL, timeout=600) as resp, \
+                        open(zip_path, "wb") as out:
+                    shutil.copyfileobj(resp, out)
+                break
+            except (urllib.error.URLError, TimeoutError) as e:
+                zip_path.unlink(missing_ok=True)
+                if attempt == attempts:
+                    raise
+                backoff = 15 * attempt
+                print(
+                    f"  download failed ({e}); retrying in {backoff}s",
+                    file=sys.stderr,
+                )
+                time.sleep(backoff)
     print(f"unpacking {zip_path.name} → {unpack.relative_to(cache_dir.parent)}",
           file=sys.stderr)
     with zipfile.ZipFile(zip_path) as zf:
