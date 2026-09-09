@@ -307,6 +307,12 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
     return false;
   }
 
+  // adsb.fi serves HTTP/1.1 chunked bodies. getStreamPtr() is the raw
+  // TCP stream (no dechunking), so ArduinoJson either errors InvalidInput
+  // or treats a decimal chunk-size prefix as a JSON number and reports
+  // 0 aircraft. HTTP/1.0 makes the body connection-delimited instead.
+  // Same one-line fix as MatixYo/ESP32-Plane-Radar#86.
+  http.useHTTP10(true);
   http.setTimeout(kRequestTimeoutMs);
   const int code = performGetWithPoll(http);
   if (code != HTTP_CODE_OK) {
