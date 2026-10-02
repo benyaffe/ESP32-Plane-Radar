@@ -22,8 +22,9 @@ tuple ordering in shapefile points, same as GeoJSON.
 """
 from __future__ import annotations
 
+import hashlib
+import http.client
 import io
-import shutil
 import sys
 import time
 import urllib.error
@@ -43,7 +44,71 @@ except ImportError as e:
 
 # Full-resolution shapefile bundle. ~150 MB compressed, ~1 GB unpacked.
 # Cached under .local-data so subsequent builds skip the download.
-GSHHG_URL = "https://www.soest.hawaii.edu/pwessel/gshhg/gshhg-shp-2.3.7.zip"
+#
+# Tried in order. The first is our own copy on the fork's
+# `data-gshhg-2.3.7` release: the upstream university server timed out
+# for GitHub Actions on three monthly runs in a row (Aug–Oct 2026), and
+# Actions caches expire after 7 idle days so they can't bridge a monthly
+# cron. Upstream stays as the fallback.
+GSHHG_SOURCES = (
+    "https://github.com/benyaffe/ESP32-Plane-Radar/releases/download/data-gshhg-2.3.7/gshhg-shp.zip",
+    "https://www.soest.hawaii.edu/pwessel/gshhg/gshhg-shp-2.3.7.zip",
+)
+# 2.3.7 is frozen (2017), so any other bytes mean a truncated or wrong
+# download — never unpack them into a bake.
+GSHHG_SHA256 = "8dbbe7e071e77e9e75f2d639239099ebca8d5c16d6a07df8169729d49f15cf41"
+ATTEMPTS_PER_SOURCE = 2
+
+
+class ChecksumMismatch(Exception):
+    pass
+
+
+def _fetch(url: str, dest: Path) -> None:
+    """Stream url → dest, hashing as we go. Raises ChecksumMismatch if
+    the bytes aren't the pinned GSHHG bundle."""
+    digest = hashlib.sha256()
+    with urllib.request.urlopen(url, timeout=120) as resp, open(dest, "wb") as out:
+        while chunk := resp.read(1 << 20):
+            digest.update(chunk)
+            out.write(chunk)
+    if digest.hexdigest() != GSHHG_SHA256:
+        raise ChecksumMismatch(f"sha256 {digest.hexdigest()} != {GSHHG_SHA256}")
+
+
+def download_gshhg(zip_path: Path) -> None:
+    """Download the bundle to zip_path, trying each source in
+    GSHHG_SOURCES with retries. Writes to a .part file and renames only
+    after the checksum passes, so zip_path is either verified or absent."""
+    part = zip_path.with_name(zip_path.name + ".part")
+    failures: list[str] = []
+    for url in GSHHG_SOURCES:
+        for attempt in range(1, ATTEMPTS_PER_SOURCE + 1):
+            print(f"downloading {url} (~150 MB, one-time) "
+                  f"[attempt {attempt}/{ATTEMPTS_PER_SOURCE}]", file=sys.stderr)
+            try:
+                _fetch(url, part)
+                part.replace(zip_path)
+                return
+            except ChecksumMismatch as e:
+                # Same URL will serve the same wrong bytes; move on.
+                part.unlink(missing_ok=True)
+                failures.append(f"{url}: {e}")
+                print(f"  wrong file ({e}); trying next source", file=sys.stderr)
+                break
+            except (OSError, http.client.HTTPException) as e:
+                part.unlink(missing_ok=True)
+                failures.append(f"{url} attempt {attempt}: {e}")
+                if attempt < ATTEMPTS_PER_SOURCE:
+                    backoff = 15 * attempt
+                    print(f"  download failed ({e}); retrying in {backoff}s",
+                          file=sys.stderr)
+                    time.sleep(backoff)
+                else:
+                    print(f"  download failed ({e}); trying next source",
+                          file=sys.stderr)
+    raise RuntimeError("could not download GSHHG from any source:\n  "
+                       + "\n  ".join(failures))
 
 
 def ensure_gshhg_extracted(cache_dir: Path) -> Path:
@@ -57,30 +122,7 @@ def ensure_gshhg_extracted(cache_dir: Path) -> Path:
         return unpack
     zip_path = cache_dir / "gshhg-shp.zip"
     if not zip_path.exists():
-        # University mirror times out ~monthly. Retry with backoff so a
-        # single transient hiccup doesn't sink an entire bake run.
-        attempts = 3
-        for attempt in range(1, attempts + 1):
-            print(
-                f"downloading {GSHHG_URL} (~150 MB, one-time) "
-                f"[attempt {attempt}/{attempts}]",
-                file=sys.stderr,
-            )
-            try:
-                with urllib.request.urlopen(GSHHG_URL, timeout=600) as resp, \
-                        open(zip_path, "wb") as out:
-                    shutil.copyfileobj(resp, out)
-                break
-            except (urllib.error.URLError, TimeoutError) as e:
-                zip_path.unlink(missing_ok=True)
-                if attempt == attempts:
-                    raise
-                backoff = 15 * attempt
-                print(
-                    f"  download failed ({e}); retrying in {backoff}s",
-                    file=sys.stderr,
-                )
-                time.sleep(backoff)
+        download_gshhg(zip_path)
     print(f"unpacking {zip_path.name} → {unpack.relative_to(cache_dir.parent)}",
           file=sys.stderr)
     with zipfile.ZipFile(zip_path) as zf:
