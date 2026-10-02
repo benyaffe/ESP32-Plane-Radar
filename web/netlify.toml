@@ -41,13 +41,10 @@
 # /radar/* — same three redirects, prefixed, for the BASE_PATH=/radar/
 # build that confidentnonsense.ai/radar proxies to on its own Netlify
 # site. No-ops here on radar.benyaffe.com since nothing requests /radar/*
-# on this site.
-[[redirects]]
-  from = "/radar"
-  to = "/radar/"
-  status = 301
-  force = true
-
+# on this site. (No from="/radar" -> "/radar/" redirect: Netlify already
+# serves dist/radar/index.html for the bare path, and a from="/radar"
+# rule's trailing-slash normalization made it match "/radar/" too,
+# redirecting it to itself.)
 [[redirects]]
   from = "/radar/api/adsb"
   to = "/.netlify/functions/adsb"
