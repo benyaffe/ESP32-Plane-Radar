@@ -138,7 +138,7 @@ export async function updateAll(): Promise<void> {
     `${bbox.latMax.toFixed(4)},${bbox.lonMax.toFixed(4)}`;
   let rows: UpstreamMetar[] = [];
   try {
-    const resp = await fetch(`/api/metar?bbox=${encodeURIComponent(bboxStr)}`, {
+    const resp = await fetch(`api/metar?bbox=${encodeURIComponent(bboxStr)}`, {
       headers: { Accept: "application/json" },
     });
     if (!resp.ok) throw new Error(`metar: HTTP ${resp.status}`);

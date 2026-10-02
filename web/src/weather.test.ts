@@ -155,7 +155,7 @@ describe("rebuildStations + updateAll", () => {
     await updateAll();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = String(fetchMock.mock.calls[0][0]);
-    expect(url).toContain("/api/metar?bbox=");
+    expect(url).toContain("api/metar?bbox=");
     // 30 nm / 60 (nm/deg) = 0.5° lat half-width.
     expect(url).toContain("37.2500");
     expect(url).toContain("38.2500");

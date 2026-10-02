@@ -8,10 +8,19 @@ import type { IncomingMessage, ServerResponse } from "http";
 // The dev-only middleware below emulates those two proxies by fetching
 // their upstreams server-side (bypasses the CORS wall). Only active
 // under `vite dev`; the production build has no server component.
+//
+// BASE_PATH lets one build serve under a path prefix instead of the site
+// root — e.g. BASE_PATH=/radar/ for the copy proxied at
+// confidentnonsense.ai/radar, which lives on its own Netlify site so this
+// site (radar.benyaffe.com) is unaffected. Unset, behavior is unchanged.
+// outDir nests under the same prefix so the published files land where a
+// path-unchanged proxy expects them (/radar/index.html, /radar/assets/...).
+const prefix = process.env.BASE_PATH?.replace(/^\/|\/$/g, "") ?? "";
+
 export default defineConfig({
-  base: "./",
+  base: prefix ? `/${prefix}/` : "./",
   build: {
-    outDir: "dist",
+    outDir: prefix ? `dist/${prefix}` : "dist",
     emptyOutDir: true,
     target: "es2022",
   },

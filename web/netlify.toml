@@ -37,3 +37,31 @@
   to = "/.netlify/functions/geocode"
   status = 200
   force = true
+
+# /radar/* — same three redirects, prefixed, for the BASE_PATH=/radar/
+# build that confidentnonsense.ai/radar proxies to on its own Netlify
+# site. No-ops here on radar.benyaffe.com since nothing requests /radar/*
+# on this site.
+[[redirects]]
+  from = "/radar"
+  to = "/radar/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/radar/api/adsb"
+  to = "/.netlify/functions/adsb"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/radar/api/metar"
+  to = "/.netlify/functions/metar"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/radar/api/geocode"
+  to = "/.netlify/functions/geocode"
+  status = 200
+  force = true

@@ -42,7 +42,7 @@ export async function lookup(query: string, signal?: AbortSignal): Promise<Geoco
   const cached = cacheGet(q);
   if (cached) return cached;
   try {
-    const resp = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`, { signal });
+    const resp = await fetch(`api/geocode?q=${encodeURIComponent(q)}`, { signal });
     if (!resp.ok) return [];
     const rows = (await resp.json()) as unknown;
     if (!Array.isArray(rows)) return [];
